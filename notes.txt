@@ -1,0 +1,10 @@
+- As of 2025-02-11, 
+i have meteorological station data for the years 1960-2022, that are homogenized or not, daily and monthly.
+i plan to use the years 1991-2020 as training-validation-testing datasets, and years 2021-2022 as downscaling 
+candidates tha are to be validated with the nms data
+i should change my data accordingly...
+i also want to incorporate slope ans aspect to the model trainig, with the slope to be recomputed, using strips for the
+correct assignment of the scaling factor in each one, and how to code aspect, especially for flat terrain...
+i sould also see what i can do with land cover data, corine land cover does not seen too promising, because i cannot figure out
+what the codes -128, 1, ..., 44, 48 represent, and how to merge codes (too many classifications for my case)
+i will probably try land cover by CDS, and maybe NDVI and LST in the future...
