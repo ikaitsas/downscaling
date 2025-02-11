@@ -8,3 +8,4 @@ corine-land-cover/
 *.parquet
 *.pkl
 *.nc
+*.log
