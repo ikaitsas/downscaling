@@ -1,0 +1,10 @@
+#ignore folders
+corine-land-cover/
+
+#ignore specific files
+*.png
+*.tif
+*.npy
+*.parquet
+*.pkl
+*.nc
