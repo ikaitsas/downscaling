@@ -1,7 +1,9 @@
 #ignore folders
 corine-land-cover/
+hnms-data/outputs-storage
 
-#ignore specific files
+#ignore file formats
+**/__pycache__/
 *.png
 *.tif
 *.npy
