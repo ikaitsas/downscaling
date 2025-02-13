@@ -1,8 +1,9 @@
-first, aggregate the DEM, from the 1arcsec native, to the desired resolution
+aggregate the DEM, from the 1arcsec native, to the desired resolution
 
-THEN compute the respective resolution slope and aspect from those corresponding aggregated DEMs
+aggregate 1arcsec native resolution sloep and aspect values - its (most probably) meaningless
 
-DONT aggregate 1arcsec native resolution sloep and aspect values - its (most probably) meaningless
+computing slope and aspect from aggregated DEM spits out garbage, like aspect
+values in the middle of the aegean sea, ill just aggregate the 1arcsec values i gues...
 
 i will write new codes that do this procedure, right now its too chaotic
 it works though, but eve i wiil forget how, because other parts require CLI, other to run a script...

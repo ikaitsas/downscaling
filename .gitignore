@@ -1,6 +1,7 @@
 #ignore folders
 corine-land-cover/
 hnms-data/outputs-storage
+DEM/outputs/outdated
 
 #ignore file formats
 **/__pycache__/

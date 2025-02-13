@@ -68,6 +68,13 @@ hnms_extent = hnms[(hnms.iloc[:,3]>=extent[0]) &
                    ]
 
 
+'''
+the following are designed for the monthly homogenized values...
+the daily homogenized and the daily raw most probably need
+some other kind of handling, like concatenation on columns, from what
+i can at least interpret from the .csv files
+'''
+
 if df.index.year.max()<year_end:
     print('\n')
     print(f'End year {year_end} too large. Using dataset end year...')
@@ -76,27 +83,27 @@ if df.index.year.max()<year_end:
 
 if df.index.year.min()>year_start:
     print('\n')
-    print(f'Start year {year_start} too small. Using dataset starting year...')
+    print(f'Start year {year_start} too small. Using dataset start year...')
     year_start = df.index.year.min()
     print(f'Start year now is: {year_start}')
 
 
 # isolate the parameters and HNMS that are common in both dataframes
 # based on the imported/given initial values
-df_hnms = df.loc[:, df.columns.isin(
+df_extent = df.loc[:, df.columns.isin(
     hnms_extent.WMO_code.astype(str).to_list() )
     ]
-df_hnms = df_hnms[
-    (df_hnms.index.year >= year_start) & 
-    (df_hnms.index.year <= year_end) 
+df_extent = df_extent[
+    (df_extent.index.year >= year_start) & 
+    (df_extent.index.year <= year_end) 
     ]
 
-if df_hnms.empty:
+if df_extent.empty:
     hnms_extent = pd.DataFrame( columns=hnms_extent.columns )
     print('No matching columns were found...')
 else:
     hnms_extent = hnms_extent[
-        hnms_extent.WMO_code.astype(str).isin(df_hnms.columns)
+        hnms_extent.WMO_code.astype(str).isin(df_extent.columns)
         ]
 
 
@@ -111,14 +118,14 @@ os.makedirs(subfolder_Path, exist_ok=True)
 # maybe should add invalid character handling in subfolder names
 
 
-df_hnms_File = (
+df_extent_File = (
     f'{parameters[parameter]}-{temporal_resolution[0][1]}__'
     f'Extent{extent[0]}-{extent[1]}-{extent[-2]}-{extent[-1]}__'
     f'Period{year_start}-{year_end}'
     f'.csv'
     )
-df_hnms_Path = os.path.join(subfolder_Path, df_hnms_File)
-df_hnms.to_csv(df_hnms_Path)
+df_extent_Path = os.path.join(subfolder_Path, df_extent_File)
+df_extent.to_csv(df_extent_Path)
 
 hnms_extent_File = (
     f'Valid_Stations_Info_HNMS__'
