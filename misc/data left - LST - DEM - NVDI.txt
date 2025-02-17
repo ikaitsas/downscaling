@@ -1,0 +1,2 @@
+possible ndvi sources:
+https://land.copernicus.eu/en/products/vegetation/normalised-difference-vegetation-index-v3-0-1km
