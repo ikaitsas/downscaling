@@ -17,7 +17,7 @@ time_scale = 0  #0:Monthly, 1:Daily
 parameter = 1 #0:RR, 1:TG, 2:TN, 3:TX
 station = 16606  #other options available
 
-extent = [21, 24, 36, 39]  #west-east-south-north
+extent = [39, 21, 36, 24]  #N-W-S-E
 year_start = 1992
 year_end = 2022
 
@@ -61,10 +61,10 @@ df = pd.read_csv(path, index_col=0, parse_dates=True)
 
 hnms = pd.read_excel("HNMS_Stations_Info.xlsx")
 
-hnms_extent = hnms[(hnms.iloc[:,3]>=extent[0]) &
-                   (hnms.iloc[:,3]<extent[1]) &
-                   (hnms.iloc[:,2]>extent[-2]) & 
-                   (hnms.iloc[:,2]<=extent[-1]) 
+hnms_extent = hnms[(hnms.iloc[:,3]>=extent[1]) & #W
+                   (hnms.iloc[:,3]<extent[-1]) & #E
+                   (hnms.iloc[:,2]>extent[-2]) & #S
+                   (hnms.iloc[:,2]<=extent[0])   #N
                    ]
 
 
@@ -108,8 +108,10 @@ else:
 
 
 #%% store files in respective folders
+extent_string = f"N{extent[0]}-W{extent[1]}-S{extent[-2]}-E{extent[-1]}"
+
 subfolder = (
-    f'Extent{extent[0]}-{extent[1]}-{extent[-2]}-{extent[-1]}__'
+    f'extent__{extent_string}__'
     f'Period{year_start}-{year_end}'
     )
 subfolder_Path = os.path.join("outputs-storage", subfolder)
@@ -120,7 +122,7 @@ os.makedirs(subfolder_Path, exist_ok=True)
 
 df_extent_File = (
     f'{parameters[parameter]}-{temporal_resolution[0][1]}__'
-    f'Extent{extent[0]}-{extent[1]}-{extent[-2]}-{extent[-1]}__'
+    f'{extent_string}__'
     f'Period{year_start}-{year_end}'
     f'.csv'
     )
@@ -128,8 +130,8 @@ df_extent_Path = os.path.join(subfolder_Path, df_extent_File)
 df_extent.to_csv(df_extent_Path)
 
 hnms_extent_File = (
-    f'Valid_Stations_Info_HNMS__'
-    f'Extent{extent[0]}-{extent[1]}-{extent[-2]}-{extent[-1]}__'
+    f'Valid_HNMS_Stations_Info__'
+    f'{extent_string}__'
     f'Period{year_start}-{year_end}'
     f'.csv'
     )

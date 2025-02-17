@@ -2,6 +2,8 @@
 corine-land-cover/
 hnms-data/outputs-storage
 DEM/outputs/outdated
+era5-land/outputs
+land-cover-classification/outputs
 
 #ignore file formats
 **/__pycache__/
