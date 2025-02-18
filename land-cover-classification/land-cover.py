@@ -64,6 +64,8 @@ print('Coordinates: {}'.format(list(ds.coords)))
 
 lc = ds.lccs_class.to_numpy()
 
+#ds.close()
+
 
 
 #%% visualization - make adjustments for choosing year
