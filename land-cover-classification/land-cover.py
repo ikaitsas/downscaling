@@ -12,7 +12,7 @@ https://dast.copernicus-climate.eu/documents/satellite-land-cover/D3.3.11-v1.0_P
 
 the classes need a bit of merging and cleaning up...
 added to the todo-list (in 2025-02-17)
-extent is N-W-S-E
+extent is N-E-S-W
 """
 
 import os
@@ -76,7 +76,7 @@ class_color_mapping  = {
     0: (0, 0, 0),           #No Data 
     10: (255, 255, 100),    #Cropland, rainfed
     11: (255, 255, 100),    #Cropland, rainfed - 
-    12: (255, 255, 100),    #Cropland, rainfed - 
+    12: (255, 255, 100),    #Cropland, rainfed - trees?
 
     20: (170, 240, 240),    #Cropland, irrigated or post-flooding
     30: (220, 240, 100),    #Mosaic cropland (>50%) / natural vegetation (tree, shrub,herbaceous cover) (<50%)
