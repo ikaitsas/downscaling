@@ -15,3 +15,4 @@ land-cover-classification/data
 *.nc
 *.log
 *.vrt
+*.csv

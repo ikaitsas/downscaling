@@ -8,3 +8,63 @@ values in the middle of the aegean sea, ill just aggregate the 1arcsec values i 
 i will write new codes that do this procedure, right now its too chaotic
 it works though, but eve i wiil forget how, because other parts require CLI, other to run a script...
 the new codes will run the CLI coomands insode a respective script
+
+
+
+
+
+
+
+
+code pieace for slope computation:
+'''
+slope_files = []
+current_lat = ymin
+strip_count = 0
+
+while current_lat < ymax:
+    # Set strip boundaries (clip to DEM if necessary)
+    strip_min = current_lat
+    strip_max = min(current_lat + strip_size, ymax)
+    
+    # Create an output filename for this strip
+    out_slope = "slope_{:0.2f}_{:0.2f}.tif".format(strip_min, strip_max)
+    
+    # Build output bounds for the clip. The full DEM width in longitude is preserved.
+    left = gt[0]
+    right = gt[0] + gt[1] * cols
+    # Note: GDAL expects bounds in the order: minX, minY, maxX, maxY.
+    # In EPSG:4326, minY = strip_min, maxY = strip_max.
+    output_bounds = (left, strip_max, right, strip_min)
+    
+    # Warp (clip) the DEM to the current latitude strip.
+    temp_strip = "temp_strip.tif"
+    translate_options = gdal.TranslateOptions(
+        projWin=output_bounds,
+        format="GTiff"
+    )
+    print("Warping DEM strip: {} to {}".format(strip_min, strip_max))
+    dem_strip = gdal.Translate(temp_strip, dem, options=translate_options)
+    dem_strip = None  # Close the temporary clip
+    
+    # Set a scale factor for DEMProcessing.  
+    # For EPSG:4326, one common approach is to use the meters per degree 
+    # for latitude. 1 degree latitude ~ (2 * pi * R) / 360.0 
+    # with R = 6378137 m.
+    scale = (2 * np.pi * 6378137) / 360.0
+    print("Computing slope for strip using scale factor: {:.2f}".format(scale))
+    
+    # Compute slope for the clipped strip using DEMProcessing.
+    gdal.DEMProcessing(out_slope, temp_strip, 'slope', scale=scale, 
+                       computeEdges=True)
+    
+    # Add output file to list and clean up temporary file.
+    slope_files.append(out_slope)
+    os.remove(temp_strip)
+    
+    print("Created slope file:", out_slope)
+    strip_count += 1
+    current_lat += strip_size
+
+ds = None  # close the original DEM
+'''
