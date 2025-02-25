@@ -3,15 +3,16 @@
 Created on Tue Feb 25 11:27:28 2025
 
 @author: yiann
+
+ADD SOME NAN VALUES PROCESSING, SOME AREAS ARE A BIT WEIRD, LIKE CRETE
+ALSO THE EDGES NEED SOME TWEAKING, SLOPE TAKES THEM INTO ACCOUNT
 """
 import os
-import subprocess
 import numpy as np
 import xarray as xr
 from osgeo import gdal
 from pathlib import Path
 import matplotlib.pyplot as plt
-from matplotlib import colormaps
 
 
 dem_file_name = "output.tif"  #must be tif format
@@ -19,6 +20,8 @@ scale_factor = 111120
 #split DEM into strips, to compute slope in using appropriate
 #scaling factor (which is latitude dependent)
 strip_size = 0.1
+
+
 export_nc_to_device = False
 export_Gtiff_to_device = False
 plot_morphography = False
@@ -30,9 +33,6 @@ save_memory = True
 cwd = Path.cwd()
 input_dem = os.path.join(cwd, f"{dem_file_name}")
 ds = gdal.Open(input_dem)
-
-slope_file_name = f"{dem_file_name[:-4]}-slope.tif"
-slope = os.path.join(cwd, slope_file_name)
 
 gt = ds.GetGeoTransform()
 rows, cols = ds.RasterYSize, ds.RasterXSize
@@ -67,6 +67,9 @@ meters_dy = res_lat * meters_latitude
 
 
 #%% Slope computation - central differences
+slope_file_name = f"{dem_file_name[:-4]}-slope.tif"
+slope_path = os.path.join(cwd, slope_file_name)
+
 # Differences computation
 dz_dx = np.zeros_like(dem, dtype=np.float32)
 dz_dy = np.zeros_like(dem, dtype=np.float32)
@@ -90,10 +93,9 @@ dz_dy[-1, :] = (dem[-1, :] - dem[-2, :]) / meters_dy
 # Compute gradient magnitude and slope
 gradient_magnitude = np.sqrt(dz_dx**2 + dz_dy**2)
 slope_radians = np.arctan(gradient_magnitude)
-slope_degrees = np.degrees(slope_radians)
+slope_degrees = np.round( np.degrees(slope_radians) )
 
-
-#%% Exportations etc
+# Export a GTiff image of the computed slope
 if export_Gtiff_to_device == True:
     driver = gdal.GetDriverByName("GTiff")
     out_ds = driver.Create(slope_file_name, cols, rows, 1, gdal.GDT_Float32)
@@ -103,9 +105,41 @@ if export_Gtiff_to_device == True:
     out_band.WriteArray(slope_degrees)
     out_band.SetNoDataValue(-9999)
     out_band.FlushCache()
-    
-    
+
+
+#%% Aspect Computation - GDAL
+aspect_file_name = f"{dem_file_name[:-4]}-aspect.tif"
+aspect_path = os.path.join(cwd, aspect_file_name)
+
+aspect_options = gdal.DEMProcessingOptions(
+    computeEdges=True,
+    alg="Horn",
+    format = "GTiff"
+    )
+gdal.DEMProcessing(aspect_path, input_dem, "aspect", options=aspect_options)
+
+
+ds_aspect = gdal.Open(aspect_path)
+aspect = ds_aspect.GetRasterBand(1).ReadAsArray().astype(np.float32)
+
+#round values to the nearest subdivision specified - must be >0
+#e.g. 10 means values get shifted to the closest XX0.0
+#e.g. 0.1 means values get shifted to the closest XXX.1
+round_to_nearest = 1
+
+if  round_to_nearest > 0:
+    aspect = np.round( aspect/round_to_nearest ) * round_to_nearest
+    aspect[aspect<0] = -round_to_nearest
+else:
+    aspect = np.round( aspect )
+    aspect[aspect<0] = -1
+
+
+#%% Exportations etc
 if export_nc_to_device == True:
+    #better yet make a land mask array
+    #and have dem, slope aspect as coords
+    #like the era5-land script
     dims = [
         "latitude",
         "longitude"
@@ -115,12 +149,19 @@ if export_nc_to_device == True:
         {
             "dem" : (dims, dem),
            "slope" : (dims, slope_degrees),
+           "aspect" : (dims, aspect),
         },
         coords = {
             "latitude" : latitudes,
             "longitude" : longitudes
             },
     )
+    
+    ds_nc["dem"].attrs["units"] = "meters"
+    ds_nc["slope"].attrs["units"] = "degrees"
+    ds_nc["aspect"].attrs["units"] = "degrees - offset from north"
+    ds_nc["latitude"].attrs["units"] = "degrees north"
+    ds_nc["longitude"].attrs["units"] = "degrees east"
     
     nc_filename_path = os.path.abspath(os.path.join(cwd, "..", "..", 
                                                     "outputs", "python")
@@ -133,6 +174,7 @@ if export_nc_to_device == True:
 
 if save_memory == True:
     ds = None
+    ds_aspect = None
     out_ds = None
     ds_nc = None
 
@@ -140,9 +182,19 @@ if save_memory == True:
 print(f"Slope calculation complete. Output saved as {slope_file_name}")
 
 if plot_morphography == True:
+    plt.title("DEM - in Meters")
+    plt.imshow(dem, cmap="inferno")
+    #plt.savefig(f"{dem_file_name[:-4]}-dem.png", dpi=1000)
+    plt.show()
+    
     plt.title("Slope - in Degrees")
     plt.imshow(slope_degrees, cmap="magma")
-    plt.savefig(f"{slope_file_name[:-4]}.png", dpi=1000)
+    #plt.savefig(f"{slope_file_name[:-4]}.png", dpi=1000)
+    plt.show()
+    
+    plt.title("Aspect - in Degrees")
+    plt.imshow(aspect, cmap="twilight_r")
+    #plt.savefig(f"{dem_file_name[:-4]}-aspect.png", dpi=1000)
     plt.show()
 
 
