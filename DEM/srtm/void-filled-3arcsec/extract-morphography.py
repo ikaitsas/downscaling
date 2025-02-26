@@ -17,9 +17,6 @@ import matplotlib.pyplot as plt
 
 dem_file_name = "output.tif"  #must be tif format
 scale_factor = 111120
-#split DEM into strips, to compute slope in using appropriate
-#scaling factor (which is latitude dependent)
-strip_size = 0.1
 
 
 export_nc_to_device = False
@@ -29,7 +26,7 @@ plot_morphography = False
 save_memory = True
 
 
-#%%
+#%% Import DEM - extract metadata
 cwd = Path.cwd()
 input_dem = os.path.join(cwd, f"{dem_file_name}")
 ds = gdal.Open(input_dem)
