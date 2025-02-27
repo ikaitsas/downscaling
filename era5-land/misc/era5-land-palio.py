@@ -25,12 +25,15 @@ import matplotlib.ticker as mticker
 extent = [39, 21, 36, 24]
 years = list(range(1992,2023))
 timescale = 'monthly'
-visualize = False
+visualize = True
 save_dfs = False
 
 
-# morphography files
-nc = xr.open_dataset("output-morphography-0.1deg.nc")
+# make those be imported via their path to the DEM folder
+dem = np.load("dem_coco0.1deg_0.1deg.npy")
+demHD = np.load("dem_coco0.01deg_0.01deg.npy")
+
+ncLD = xr.open_dataset("output-morphography-0.1deg.nc")
 ncHD = xr.open_dataset("output-morphography-0.01deg.nc")
 
 
@@ -56,20 +59,14 @@ file_path = os.path.join(folder, filename)
 ds = xr.open_dataset(file_path)
 
 ds = ds.drop_isel(latitude=-1, longitude=-1)
+#parakatw kanei slice, oxi removal, alla epeidh kanw
+#reassign sthn idia metablhth, praktika prokyptei to idio
+#ds = ds.isel(latitude=slice(None, -1))
 
-print('Merging with the ERA5-Land resolution Morphography...')
-ds.coords["dem"] = (["latitude", "longitude"], nc.dem.data)
+print('Merging with the ERA5-Land resolution DEM')
+ds.coords["dem"] = (["latitude", "longitude"], dem)
 ds.coords["dem"].attrs["units"] = "meters"
 ds.coords["dem"].attrs["description"] = "Elevation at each lat-lon pair"
-
-ds.coords["slope"] = (["latitude", "longitude"], nc.slope.data)
-ds.coords["slope"].attrs["units"] = "degrees"
-ds.coords["slope"].attrs["description"] = "Slope at each lat-lon pair"
-
-ds.coords["aspect"] = (["latitude", "longitude"], nc.aspect.data)
-ds.coords["aspect"].attrs["units"] = "degrees - offset from North"
-ds.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
-
 
 if "number" in ds.coords:
     ds = ds.reset_coords(["number"], drop=True)
@@ -108,6 +105,11 @@ if "valid_time" in df.columns:
 if save_dfs == True:
     df.to_parquet("df.parquet")
 
+#will probably make the column order specified explicitly, to
+#avoid any column order mismatches for ML & NN training, t2m
+#order specification is not enough...
+#will be done to dfHD below too...
+
 
 #%% create downscalign HD array
 scaling_factor = 10  #divide resolution by this number
@@ -123,27 +125,24 @@ t2mHD_array = np.repeat(
 scaled_coords = {
     #kane kalyterh diatypwsh sthn epilogh twn min/max sta lat/lon
     'valid_time': ds.t2m.valid_time.values,
-    'latitude': ncHD.latitude.data,
-    'longitude': ncHD.longitude.data,  
+    'latitude': np.arange(ds.latitude.values[0],
+                          ds.latitude.values[-1]-era5Land_resolution,
+                          -era5Land_resolution/scaling_factor)[:-1],
+    'longitude': np.arange(ds.longitude.values[0],
+                           ds.longitude.values[-1]+era5Land_resolution,
+                           era5Land_resolution/scaling_factor)[:-1], 
 }
 
-# better to do this a dataset, for consistency...
+
 t2mHD = xr.DataArray(t2mHD_array,
                      coords=scaled_coords,
                      dims=["valid_time", "latitude", "longitude"]
                      )
 
-t2mHD.coords["dem"] = (["latitude", "longitude"], ncHD.dem.data)
+t2mHD.coords["dem"] = (["latitude", "longitude"], demHD)
+
 t2mHD.coords["dem"].attrs["units"] = "meters"
 t2mHD.coords["dem"].attrs["description"] = "Elevation at each lat-lon pair"
-
-t2mHD.coords["slope"] = (["latitude", "longitude"], ncHD.slope.data)
-t2mHD.coords["slope"].attrs["units"] = "degrees"
-t2mHD.coords["slope"].attrs["description"] = "Slope at each lat-lon pair"
-
-t2mHD.coords["aspect"] = (["latitude", "longitude"], ncHD.aspect.data)
-t2mHD.coords["aspect"].attrs["units"] = "degrees - offset from North"
-t2mHD.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 
 
 print(f'Extracting {era5Land_resolution/scaling_factor}deg HD dataframe...')

@@ -82,6 +82,9 @@ for i,morphi in enumerate(morphography):
     array_agg = np.nanmean(reshaped, axis=(1, 3)).round()
     
     if morphi == "aspect":
+        #aspect filtering done later, to pass the flat surfaces
+        #info (-9999 values) better to the aggregation?
+        #idk if this is better, ill look into it
         array[array<0] = -1
         array_agg[array_agg<0] = -1
     
