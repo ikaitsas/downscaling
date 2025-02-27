@@ -33,6 +33,9 @@ save_dfs = False
 dem = np.load("dem_coco0.1deg_0.1deg.npy")
 demHD = np.load("dem_coco0.01deg_0.01deg.npy")
 
+ncLD = xr.open_dataset("output-morphography-0.1deg.nc")
+ncHD = xr.open_dataset("output-morphography-0.01deg.nc")
+
 
 #%% extracting file location - NEED TO MAKE THIS A FUNCTION
 extent_string =  f'N{extent[0]}-W{extent[1]}-S{extent[-2]}-E{extent[-1]}'

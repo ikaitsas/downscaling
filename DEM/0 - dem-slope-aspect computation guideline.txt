@@ -12,7 +12,8 @@ the new codes will run the CLI coomands insode a respective script
 
 
 
-
+ALL THOSE SCRIPTS COULD, AND SHOULD, BE MADE INTO FUNCTIONS, AND BE RUN AT A 
+DIFFERENT SCRIPT AS A WHOLE
 
 
 

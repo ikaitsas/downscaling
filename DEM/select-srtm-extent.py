@@ -35,6 +35,9 @@ input_dem = "output.tif"
 extent = [21, 39, 24, 36]  #W-N-E-S
 #set True if extent corresponds to center of grid cells
 reference_center = True
+#set True if you want to expand out to all directions
+#else it just shifts the DEM north and west, matching ERA5
+expand_to_all_directions = False
 
 
 dem_file_name = input_dem[:-4]
@@ -70,14 +73,23 @@ for morphi in morphography:
     
     if reference_center == True:
         # subwindow to extract - in projected coordinates
-        subwindow = [
-            extent[0]-nc_file_resolution/2, 
-            extent[1]+nc_file_resolution/2, 
-            extent[2]+nc_file_resolution/2, 
-            extent[3]-nc_file_resolution/2
-            ]
+        if expand_to_all_directions == True:
+            subwindow = [
+                extent[0]-nc_file_resolution/2, 
+                extent[1]+nc_file_resolution/2, 
+                extent[2]+nc_file_resolution/2, 
+                extent[3]-nc_file_resolution/2
+                ]
+        else:
+            subwindow = [
+                extent[0]-nc_file_resolution/2, 
+                extent[1]+nc_file_resolution/2, 
+                extent[2]-nc_file_resolution/2, 
+                extent[3]+nc_file_resolution/2
+                ]
     else:
         subwindow = extent
+        
     
     try:
         gdal.UseExceptions()
@@ -93,6 +105,14 @@ for morphi in morphography:
         print(f'Saving in:  {extent_path}\n')
     except Exception as e:
         print(f"Error:\n{e}")
+
+
+ds = gdal.Open(extent_path)
+gt = ds.GetGeoTransform()
+rows, cols = ds.RasterYSize, ds.RasterXSize
+
+ds = None
+        
 
 #%% Subprocess methodology - works the same as gdal python utilities
 '''
