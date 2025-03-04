@@ -8,11 +8,11 @@ Tidying up ERA5-Land data and import DEM-derived morphography metadata
 in the respective coordinates
 
 Will probably add land cover data in here too
-And any other data needes, either as keys, coordinates, dimensions,
+And any other data needed, either as keys, coordinates, dimensions,
 straight to the Datasets and DataArrays...
 """
 
-print('Importing libraris and data...')
+print('Importing libraries and data...')
 import os
 import numpy as np
 import xarray as xr
@@ -26,12 +26,12 @@ extent = [39, 21, 36, 24]
 years = list(range(1992,2023))
 timescale = 'monthly'
 visualize = False
-save_dfs = False
+save_to_device = False
 
 
 # morphography files
-nc = xr.open_dataset("output-morphography-0.1deg.nc")
-ncHD = xr.open_dataset("output-morphography-0.01deg.nc")
+dem = xr.open_dataset("output-morphography-0.1deg.nc")
+demHD = xr.open_dataset("output-morphography-0.01deg.nc")
 
 
 #%% extracting file location - NEED TO MAKE THIS A FUNCTION
@@ -58,18 +58,20 @@ ds = xr.open_dataset(file_path)
 ds = ds.drop_isel(latitude=-1, longitude=-1)
 
 print('Merging with the ERA5-Land resolution Morphography...')
-ds.coords["dem"] = (["latitude", "longitude"], nc.dem.data)
+ds.coords["dem"] = (["latitude", "longitude"], dem.dem.data)
 ds.coords["dem"].attrs["units"] = "meters"
 ds.coords["dem"].attrs["description"] = "Elevation at each lat-lon pair"
 
-ds.coords["slope"] = (["latitude", "longitude"], nc.slope.data)
+ds.coords["slope"] = (["latitude", "longitude"], dem.slope.data)
 ds.coords["slope"].attrs["units"] = "degrees"
 ds.coords["slope"].attrs["description"] = "Slope at each lat-lon pair"
 
-ds.coords["aspect"] = (["latitude", "longitude"], nc.aspect.data)
+ds.coords["aspect"] = (["latitude", "longitude"], dem.aspect.data)
 ds.coords["aspect"].attrs["units"] = "degrees - offset from North"
 ds.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 
+ds.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
+ds.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
 if "number" in ds.coords:
     ds = ds.reset_coords(["number"], drop=True)
@@ -86,13 +88,22 @@ if "number" in df.columns:
     df = df.drop(columns=['number'])
 if "expver" in df.columns:
     df = df.drop(columns=['expver'])
-    
-t2mColumn = "t2m"  #list(ds.keys())[i] more generally - i=0 here
-t2mColumn1st = [t2mColumn] + [col for col in df.columns if col!=t2mColumn]
-df = df[t2mColumn1st]  #ensure t2m is always first column
 
-if "valid_time" in df.index.names:
-    df['valid_time'] = df.index.get_level_values("valid_time")  #lvl-0
+# explicitly order the columns, important for modelling!
+t2mColumn = ds.t2m.name  
+column_to_keep = [t2mColumn, 
+                  ds.latitude.name, 
+                  ds.longitude.name,
+                  ds.dem.name, 
+                  ds.slope.name,
+                  ds.aspect.name,
+                  ds.valid_year.name,
+                  ds.valid_month.name
+                  ]
+
+if ("valid_time" in df.index.names) & ("valid_month" not in df.columns):
+    print("f")
+    df["valid_time"] = df.index.get_level_values("valid_time")
     df['valid_year'] = df.valid_time.dt.year
     df['valid_month'] = df.valid_time.dt.month
 
@@ -104,9 +115,8 @@ if "longitude" in df.index.names:
 if "valid_time" in df.columns:
     df = df.drop(columns=['valid_time'])
 
+df = df[column_to_keep]  #ensure t2m is always first column
 #df = df.reset_index(drop=True)
-if save_dfs == True:
-    df.to_parquet("df.parquet")
 
 
 #%% create downscalign HD array
@@ -123,8 +133,8 @@ t2mHD_array = np.repeat(
 scaled_coords = {
     #kane kalyterh diatypwsh sthn epilogh twn min/max sta lat/lon
     'valid_time': ds.t2m.valid_time.values,
-    'latitude': ncHD.latitude.data,
-    'longitude': ncHD.longitude.data,  
+    'latitude': demHD.latitude.data,
+    'longitude': demHD.longitude.data,  
 }
 
 # better to do this a dataset, for consistency...
@@ -133,27 +143,28 @@ t2mHD = xr.DataArray(t2mHD_array,
                      dims=["valid_time", "latitude", "longitude"]
                      )
 
-t2mHD.coords["dem"] = (["latitude", "longitude"], ncHD.dem.data)
+t2mHD.coords["dem"] = (["latitude", "longitude"], demHD.dem.data)
 t2mHD.coords["dem"].attrs["units"] = "meters"
 t2mHD.coords["dem"].attrs["description"] = "Elevation at each lat-lon pair"
 
-t2mHD.coords["slope"] = (["latitude", "longitude"], ncHD.slope.data)
+t2mHD.coords["slope"] = (["latitude", "longitude"], demHD.slope.data)
 t2mHD.coords["slope"].attrs["units"] = "degrees"
 t2mHD.coords["slope"].attrs["description"] = "Slope at each lat-lon pair"
 
-t2mHD.coords["aspect"] = (["latitude", "longitude"], ncHD.aspect.data)
+t2mHD.coords["aspect"] = (["latitude", "longitude"], demHD.aspect.data)
 t2mHD.coords["aspect"].attrs["units"] = "degrees - offset from North"
 t2mHD.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
+
+t2mHD.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
+t2mHD.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
 
 print(f'Extracting {era5Land_resolution/scaling_factor}deg HD dataframe...')
 dfHD = t2mHD.to_dataframe(name='t2m')
 
-t2mColumn = "t2m"  #list(ds.keys())[i] more generally - i=0 for t2m here
-t2mColumn1st = [t2mColumn] + [col for col in dfHD.columns if col!=t2mColumn]
-dfHD = dfHD[t2mColumn1st]  #ensure t2m is always first column
 
-if "valid_time" in dfHD.index.names:
+if ("valid_time" in dfHD.index.names) & ("valid_month" not in dfHD.columns):
+    print("f")
     dfHD['valid_time'] = dfHD.index.get_level_values("valid_time")  #lvl-0
     dfHD['valid_year'] = dfHD.valid_time.dt.year
     dfHD['valid_month'] = dfHD.valid_time.dt.month
@@ -166,10 +177,82 @@ if "longitude" in dfHD.index.names:
 if "valid_time" in dfHD.columns:
     dfHD = dfHD.drop(columns=['valid_time'])
 
+dfHD = dfHD[column_to_keep]
 #dfHD = dfHD.reset_index(drop=True)
-if save_dfs == True:
-    dfHD.to_parquet("dfHD.parquet")
 
+
+#%% exportation to device
+if save_to_device == True:
+    # HD is for high resolution auxilliary variables
+    # t2mHD is not "HD" by itself, just repeated
+    
+    df.to_parquet("df.parquet")
+    ds.to_netcdf("t2m.nc")
+    
+    dfHD.to_parquet("dfHD.parquet")
+    t2mHD.to_netcdf("t2mHD.nc")
+    
+
+# Bring data to a tensor format
+# Create a CNN channel-based feature map
+# ilithios chatgtp tropos - tha to kanw me diko mou
+# alla se allh fash
+t2mLD = np.expand_dims(ds.t2m.to_numpy(), axis=-1)
+
+demHD_array = demHD.dem.to_numpy()
+demHD_array = np.repeat( 
+    np.expand_dims(demHD_array, axis=0), 
+    ds.valid_time.shape[0], axis=0
+    ) 
+demHD_array = np.expand_dims(demHD_array, axis=-1)
+
+slopeHD = np.repeat( 
+    np.expand_dims(
+        demHD.slope.values, 
+        axis=0), 
+    ds.valid_time.shape[0], axis=0
+    )
+slopeHD = np.expand_dims(slopeHD, axis=-1)
+
+aspectHD = np.repeat( 
+    np.expand_dims(
+        demHD.aspect.to_numpy(), 
+        axis=0), 
+    ds.valid_time.shape[0], axis=0
+    )
+aspectHD = np.expand_dims(aspectHD, axis=-1)
+
+lon, lat = np.meshgrid(demHD.longitude.values, demHD.latitude.values)
+
+lon = np.repeat(
+    np.expand_dims(lon, axis=0), 
+    ds.valid_time.shape[0], axis=0
+    )
+lon = np.expand_dims(lon, axis=-1)
+
+lat = np.repeat( 
+    np.expand_dims(lat, axis=0), 
+    ds.valid_time.shape[0], axis=0
+    )
+lat = np.expand_dims(lat, axis=-1)
+
+months = np.expand_dims(ds.valid_month.to_numpy(), axis=-1)
+years = np.expand_dims(ds.valid_year.to_numpy(), axis=-1)
+
+hd_aux = np.concatenate(
+    [lat, lon, demHD_array, slopeHD, aspectHD], 
+    axis=-1
+    )
+
+time_aux = np.concatenate([years, months], axis=-1)
+
+if save_to_device == True:
+    np.save("t2mLD-input.npy", t2mLD)
+    np.save("hd-auxilliary.npy", hd_aux)
+    np.save("time-auxilliary.npy", time_aux)
+# use t2mLD, hd_aux, time_aux for neural network building
+# and training - the rest are in some chatgtp convo...
+    
 
 #%%
 valid_time_index = 11
@@ -231,67 +314,4 @@ if visualize == True:
 
 print('Done')
 
-
-'''
-#------------------------------------------------------------------------------
-#advanced cartopy plotting - based on eumetsat autumn course
-
-# choose the plot size (width x height, in inches)
-plt.figure(figsize=(10,10))
-
-# use the PlateCarree projection in cartopy
-ax = plt.axes(projection=ccrs.PlateCarree())
-
-# define the image extent
-img_extent = [lons.min(), lons.max(), lats.min(), lats.max()]
-
-
-# plot the image
-img = ax.imshow(data, vmin=-10, vmax=50, origin='upper', extent = img_extent, 
-                cmap='jet',interpolation = 'None')
-
-
-# add some various map elements to the plot
-ax.add_feature(cfeature.LAND)
-ax.add_feature(cfeature.OCEAN)
-
-# add coastlines, borders and gridlines
-ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-ax.add_feature(cartopy.feature.BORDERS, edgecolor='black', linewidth=0.4)
-gl = ax.gridlines(crs=ccrs.PlateCarree(), 
-                  color='gray', 
-                  alpha=1.0, 
-                  linestyle='--', 
-                  linewidth=0.25,
-                  xlocs=np.arange(-180, 181, 10), 
-                  ylocs=np.arange(-90, 91, 10), 
-                  draw_labels=True)
-
-gl.top_labels = False
-gl.right_labels = False
-
-# add a colorbar
-plt.colorbar(img, label='Land Surface Temperature - All Sky (°C)', 
-             extend='both', orientation='horizontal',
-             pad=0.05, fraction=0.04)
-
-# get the date
-date_str  = file.getncattr('time_coverage_start')
-date_format = '%Y-%m-%dT%H:%M:%SZ'
-date_obj = datetime.strptime(date_str, date_format)
-date = date_obj.strftime('%Y-%m-%d %H:%M:%S UTC')
-
-# add a title
-plt.title(f'MSG/SEVIRI -  LST - All Sky \n{date}', fontweight='bold', 
-          fontsize=10, loc='left')
-plt.title('Autumn School 2024', fontsize=10, loc='right')
-
-# save the image
-plt.savefig('OUTPUT/image_LST-AS_2.png')
-
-# show the image
-plt.show()
-
-
-'''
 
