@@ -28,14 +28,19 @@ hr_aspect = np.expand_dims( hd_aux[:,:,:,4], axis=-1 )
 
 hd_aux=None
 
+
 # different types pf scaler needed for some columns
 scaler_z = StandardScaler()
+scaler_mm = MinMaxScaler(feature_range=(0.001, 0.999))
 
 lr_temp = scaler_z.fit_transform(
     lr_temp.reshape(-1, 1)
     ).reshape(
         lr_temp.shape
         )
+mask = ~np.isnan(lr_temp)
+lr_temp_filled = np.nan_to_num(lr_temp, nan=0.001)  # Replace NaNs with 0
+
 
 hr_elevation = scaler_z.fit_transform(
     hr_elevation.reshape(-1, 1)
@@ -43,7 +48,7 @@ hr_elevation = scaler_z.fit_transform(
         hr_elevation.shape
         )
         
-hr_slope = scaler_z.fit_transform(
+hr_slope = scaler_mm.fit_transform(
     hr_slope.reshape(-1, 1)
     ).reshape(
         hr_slope.shape
@@ -64,7 +69,6 @@ hr_aspect_sin=None
 hr_aspect_cos=None
 hr_aspect_flat=None
 
-scaler_mm = MinMaxScaler(feature_range=(0.001, 0.999))
 hr_lat = scaler_mm.fit_transform(hr_lat.reshape(-1, 1)).reshape(hr_lat.shape)
 hr_lon = scaler_mm.fit_transform(hr_lon.reshape(-1, 1)).reshape(hr_lon.shape)
 
@@ -77,6 +81,7 @@ hr_lat=None
 hr_lon=None
 hr_elevation=None
 hr_slope=None
+hr_aspect=None
 
 # Load temporal variables (not spatial, just for conditioning)
 time = np.load("time-auxilliary.npy")  # Shape: (num_samples, 1)
@@ -95,19 +100,234 @@ years=None
 time=None
 
 
+lr = lr_temp_filled[:12,:,:,:]
+mk = mask[:12,:,:,:]
+hr = hr_aux[:12,:,:,:]
+tm = time_aux[:12,:]
+
 #%% model
 input_shape_temp = lr_temp.shape[1:]
 input_shape_spatial = hr_aux.shape[1:]
-input_shape_time = time_aux.shape[1:]
+input_shape_temporal = time_aux.shape[1:]
 
 
+def upsample_mask(mask, target_shape):
+    """
+    Upsample the low-resolution mask to match the target shape.
+    
+    Parameters:
+    - mask: Low-resolution mask (e.g., 30x30)
+    - target_shape: Target shape (e.g., 300x300)
+    
+    Returns:
+    - Upsampled mask
+    """
+    if mask.dtype == "bool":
+        mask = mask.astype(np.float32)
+    mask_upsampled = tf.image.resize(mask, target_shape, method='nearest')
+    return mask_upsampled
+
+
+def masked_loss(y_true, y_pred, mask):
+    """
+    Custom MSE loss that ignores masked regions.
+
+    Parameters:
+    - y_true: "Ground truth" temperature maps (NaNs already replaced).
+    - y_pred: Model-predicted temperature maps.
+    - mask: Precomputed mask (same shape as y_true, 1-valid values, 0-NaNs).
+
+    Returns:
+    - Masked Mean Squared Error loss.
+    """
+    # Ensure inputs are tensors
+    y_true = tf.convert_to_tensor(y_true, dtype=tf.float32)
+    y_pred = tf.convert_to_tensor(y_pred, dtype=tf.float32)
+    
+    mask = tf.convert_to_tensor(mask, dtype=tf.float32)
+
+    # Compute Mean Squared Error
+    loss = tf.keras.losses.MSE(y_true, y_pred)
+
+    # Apply mask to ignore NaN regions
+    masked_loss = tf.reduce_sum(loss * mask) / tf.reduce_sum(mask)
+
+    return masked_loss
+
+
+def masked_loss_wrapper(mask, target_shape):
+    mask_upsampled = upsample_mask(mask, target_shape)
+    
+    def loss(y_true, y_pred):
+        return masked_loss(y_true, y_pred, mask_upsampled)
+    return loss
+
+
+#try this one too:
+def build_temperature_model(
+        input_shape_temp, input_shape_spatial, input_shape_temporal, mask
+        ):
+    """
+    Build a CNN model to output high-resolution temperature images 
+    (300x300) using auxiliary spatial and temporal variables.
+    
+    Parameters:
+    - input_shape_temp: Shape of the low-resolution temperature image 
+    (e.g., (30, 30, 1)).
+    - input_shape_spatial: Shape of the auxiliary spatial input 
+    (e.g., (300, 300, 7)).
+    - input_shape_temporal: Shape of the auxiliary temporal input 
+    (e.g., (3,)).
+
+    Returns:
+    - model: Keras model object.
+    """
+    target_shape = input_shape_spatial[:-1]  # for mask upscaling
+    
+    # Input layers
+    temp_input = layers.Input(
+        shape=input_shape_temp, name='temp_input'
+        )  # Low-resolution temperature input
+    spatial_input = layers.Input(
+        shape=input_shape_spatial, name='spatial_input'
+        )  # 7-channel spatial auxiliary variables
+    temporal_input = layers.Input(
+        shape=input_shape_temporal, name='temporal_input'
+        )  # 3-channel temporal auxiliary variables
+
+    # Spatial feature extraction branch
+    spatial_branch = layers.Conv2D(
+        32, (3, 3), activation='relu', padding='same'
+        )(spatial_input)
+    spatial_branch = layers.Conv2D(
+        64, (3, 3), activation='relu', padding='same'
+        )(spatial_branch)
+    spatial_branch = layers.Conv2D(
+        128, (3, 3), activation='relu', padding='same'
+        )(spatial_branch)
+
+    # Temporal feature extraction branch
+    temporal_branch = layers.Dense(
+        64, activation='relu'
+        )(temporal_input)
+    temporal_branch = layers.Dense(
+        128, activation='relu'
+        )(temporal_branch)
+
+    # Upsampling the low-resolution temperature input
+    temp_branch = layers.Conv2D(
+        32, (3, 3), activation='relu', padding='same'
+        )(temp_input)
+    temp_branch = layers.Conv2D(
+        64, (3, 3), activation='relu', padding='same'
+        )(temp_branch)
+    temp_branch = layers.Conv2DTranspose(
+        128, (3, 3), strides=(2, 2), activation='relu', padding='same'
+        )(temp_branch)  # Upsample to 60x60?
+    temp_branch = layers.Conv2DTranspose(
+        128, (3, 3), strides=(5, 5), activation='relu', padding='same'
+        )(temp_branch)  # Upsample to 300x300
+
+    # Combine spatial and upsampled temperature features
+    combined = layers.Concatenate()([temp_branch, spatial_branch])
+
+    # Pass through further convolutional layers
+    combined = layers.Conv2D(
+        128, (3, 3), activation='relu', padding='same'
+        )(combined)
+    combined = layers.Conv2D(
+        256, (3, 3), activation='relu', padding='same'
+        )(combined)
+
+    # Expand temporal features and merge
+    temporal_expanded = layers.Reshape(
+        (1, 1, 128)
+        )(temporal_branch)
+    temporal_expanded = layers.UpSampling2D(
+        size=(300, 300)
+        )(temporal_expanded)  # Broadcast temporal features
+    combined = layers.Concatenate()(
+        [combined, temporal_expanded]
+        )
+
+    # Decoder path to refine the high-resolution output
+    x = layers.Conv2D(
+        128, (3, 3), activation='relu', padding='same'
+        )(combined)
+    x = layers.Conv2D(
+        64, (3, 3), activation='relu', padding='same'
+        )(x)
+    x = layers.Conv2D(
+        32, (3, 3), activation='relu', padding='same'
+        )(x)
+
+    # Output layer with a single channel for temperature prediction
+    temp_output = layers.Conv2D(
+        1, (3, 3), activation='linear', padding='same', name='temp_output'
+        )(x)
+
+    # Construct the model
+    model = models.Model(
+        inputs=[temp_input, spatial_input, temporal_input], 
+        outputs=[temp_output]
+        )
+
+    # Compile the model
+    model.compile(
+        optimizer='adam', 
+        loss=masked_loss_wrapper(mask, target_shape), 
+        metrics=['mae']
+        )
+
+    return model
+# this can probably be done by masking the nan inside the function
+# by simply using the masked_loss_not_preprocessed function
+# but this approach must not have its data preprocessed to 
+# remove NaNs
+
+# Define the input shapes
+# Build the model
+model = build_temperature_model(
+    input_shape_temp, input_shape_spatial, input_shape_temporal, 
+    mask=mk
+    )
+
+# Summarize the model
+model.summary()
+
+
+
+#%%
+'''
+def masked_loss_not_preprocessed(y_true, y_pred, masking=mk):
+    # Ensure y_true is a TensorFlow tensor
+    y_true = tf.convert_to_tensor(y_true, dtype=tf.float32)
+    y_pred = tf.convert_to_tensor(y_pred, dtype=tf.float32)
+
+    # Create a mask where NaN values were present (0-NaNs, 1-valid values)
+    mask = tf.math.logical_not(tf.math.is_nan(y_true))  # True-valid, False-NaN
+    mask = tf.cast(mask, dtype=tf.float32)  # Boolean mask to float (1-0)
+
+    # Replace NaNs in y_true with 0.001
+    y_true = tf.where(mask == 1, y_true, tf.fill(tf.shape(y_true), 0.001))
+
+    # Compute Mean Squared Error
+    loss = tf.keras.losses.MSE(y_true, y_pred)
+
+    # Apply mask: Ignore NaN regions in loss computation
+    masked_loss = tf.reduce_sum(loss * mask) / tf.reduce_sum(mask)
+
+    return masked_loss
+'''
+'''
 def build_downscaling_model(input_shape_temp, input_shape_spatial, input_shape_temporal):
     """Builds a CNN-based super-resolution model with auxiliary data fusion."""
 
     # Low-resolution temperature input
     lr_input = keras.Input(shape=input_shape_temp, name="lr_temperature")
     
-    # High-resolution auxiliary variables (Elevation, Slope, Aspect, Latitude, Longitude)
+    # High-resolution auxiliary variables 
+    # (Elevation, Slope, Aspect, Latitude, Longitude)
     aux_input = keras.Input(shape=input_shape_spatial, name="aux_vars")
     
     # Temporal inputs (Month, Year)
@@ -145,89 +365,24 @@ def build_downscaling_model(input_shape_temp, input_shape_spatial, input_shape_t
     output = layers.Conv2D(1, (3,3), activation="linear", padding="same")(fusion)
 
     return keras.Model(inputs=[lr_input, aux_input, temporal_input], outputs=output)
-
 '''
-#try this one too:
-import tensorflow as tf
-from tensorflow.keras import layers, models
 
-def build_temperature_model(input_shape_temp, input_shape_spatial, input_shape_temporal):
-    """
-    Build a CNN model to output high-resolution temperature images (300x300) using auxiliary spatial and temporal variables.
-    
-    Parameters:
-    - input_shape_temp: Shape of the low-resolution temperature image (e.g., (30, 30, 1)).
-    - input_shape_spatial: Shape of the auxiliary spatial input (e.g., (300, 300, 7)).
-    - input_shape_temporal: Shape of the auxiliary temporal input (e.g., (3,)).
 
-    Returns:
-    - model: Keras model object.
-    """
-    
-    # Input layers
-    temp_input = layers.Input(shape=input_shape_temp, name='temp_input')  # Low-resolution temperature input
-    spatial_input = layers.Input(shape=input_shape_spatial, name='spatial_input')  # 7-channel spatial auxiliary variables
-    temporal_input = layers.Input(shape=input_shape_temporal, name='temporal_input')  # 3-channel temporal auxiliary variables
-
-    # Spatial feature extraction branch
-    spatial_branch = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(spatial_input)
-    spatial_branch = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(spatial_branch)
-    spatial_branch = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(spatial_branch)
-
-    # Temporal feature extraction branch
-    temporal_branch = layers.Dense(64, activation='relu')(temporal_input)
-    temporal_branch = layers.Dense(128, activation='relu')(temporal_branch)
-
-    # Upsampling the low-resolution temperature input
-    temp_branch = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(temp_input)
-    temp_branch = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(temp_branch)
-    temp_branch = layers.Conv2DTranspose(128, (3, 3), strides=(2, 2), activation='relu', padding='same')(temp_branch)  # Upsample
-    temp_branch = layers.Conv2DTranspose(128, (3, 3), strides=(5, 5), activation='relu', padding='same')(temp_branch)  # Upsample to 300x300
-
-    # Combine spatial and upsampled temperature features
-    combined = layers.Concatenate()([temp_branch, spatial_branch])
-
-    # Pass through further convolutional layers
-    combined = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(combined)
-    combined = layers.Conv2D(256, (3, 3), activation='relu', padding='same')(combined)
-
-    # Expand temporal features and merge
-    temporal_expanded = layers.Reshape((1, 1, 128))(temporal_branch)
-    temporal_expanded = layers.UpSampling2D(size=(300, 300))(temporal_expanded)  # Broadcast temporal features
-    combined = layers.Concatenate()([combined, temporal_expanded])
-
-    # Decoder path to refine the high-resolution output
-    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(combined)
-    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x)
-    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(x)
-
-    # Output layer with a single channel for temperature prediction
-    temp_output = layers.Conv2D(1, (3, 3), activation='linear', padding='same', name='temp_output')(x)
-
-    # Construct the model
-    model = models.Model(inputs=[temp_input, spatial_input, temporal_input], outputs=[temp_output])
-
-    # Compile the model
-    model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae'])
-
-    return model
-
-# Define the input shapes
-input_shape_temp = (30, 30, 1)  # Low-resolution temperature
-input_shape_spatial = (300, 300, 7)  # Spatial auxiliary variables (lat, lon, elevation, slope, aspect sin, aspect cos, aspect flat)
-input_shape_temporal = (3,)  # Temporal auxiliary variables (months sin, months cos, years)
-
-# Build the model
-model = build_temperature_model(input_shape_temp, input_shape_spatial, input_shape_temporal)
-
-# Summarize the model
-model.summary()
-'''
 '''
 def multi_scale_consistency_loss(y_true, y_pred):
-    """Ensures the downscaled temperature remains consistent at different scales."""
-    y_pred_lr = tf.image.resize(y_pred, size=(y_true.shape[1] // 2, y_true.shape[2] // 2), method="bilinear")
-    return keras.losses.MeanSquaredError()(tf.image.resize(y_true, size=y_pred_lr.shape[1:3]), y_pred_lr)
+    """Ensures downscaled temperature's rconsistency at different scales."""
+    y_pred_lr = tf.image.resize(
+        y_pred, size=(
+            y_true.shape[1] // 2, y_true.shape[2] // 2
+            ), 
+        method="bilinear"
+        )
+    return keras.losses.MeanSquaredError()(
+        tf.image.resize(
+            y_true, size=y_pred_lr.shape[1:3]
+            ), 
+        y_pred_lr
+        )
 
 # Physical Constraint Loss (Temperature-Elevation)
 def elevation_temperature_loss(y_pred, elevation):
@@ -235,77 +390,4 @@ def elevation_temperature_loss(y_pred, elevation):
     lapse_rate = -0.0065  # Degrees per meter
     expected_temp_change = elevation * lapse_rate
     return keras.losses.MeanSquaredError()(y_pred + expected_temp_change, y_pred)
-
-# Build the model
-model = build_downscaling_model()
-
-# Compile with a combination of losses
-model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), 
-              loss={"output": multi_scale_consistency_loss}, 
-              metrics=["mae"])
-
-# Train
-history = model.fit(
-    x=[lr_temp, hr_aux, np.concatenate([years, months], axis=-1)], 
-    y=lr_temp,  # Using LR as self-supervised target
-    batch_size=32, 
-    epochs=20, 
-    validation_split=0.2
-)
-'''
-'''
-mask = ~np.isnan(lr_temp)
-
-def masked_loss(y_true, y_pred):
-    mask_tensor = tf.cast(mask, dtype=tf.float32)  # Convert to Tensor
-    loss = tf.keras.losses.MSE(y_true, y_pred)  # Compute MSE loss
-    return tf.reduce_sum(loss * mask_tensor) / tf.reduce_sum(mask_tensor)  # Normalize
-
-# Multi-Scale Consistency Loss
-def multi_scale_consistency_loss(y_true, y_pred):
-    """Ensures the downscaled temperature remains consistent at different scales."""
-    y_pred_lr = tf.image.resize(y_pred, size=(y_true.shape[1] // 2, y_true.shape[2] // 2), method="bilinear")
-    return keras.losses.MeanSquaredError()(tf.image.resize(y_true, size=y_pred_lr.shape[1:3]), y_pred_lr)
-
-# Physical Constraint Loss (Temperature-Elevation)
-def elevation_temperature_loss(y_pred, elevation):
-    """Enforces temperature to decrease with elevation following lapse rate."""
-    lapse_rate = -0.0065  # Degrees per meter
-    expected_temp_change = elevation * lapse_rate
-    return keras.losses.MeanSquaredError()(y_pred + expected_temp_change, y_pred)
-'''
-'''
-# Build the model
-model = build_downscaling_model()
-
-# Compile with a combination of losses
-model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001), 
-              loss={"output": multi_scale_consistency_loss}, 
-              metrics=["mae"])
-
-# Train
-history = model.fit(
-    x=[lr_temp, np.concatenate([hr_elevation, hr_slope, hr_aspect], axis=-1), np.concatenate([months, years], axis=-1)], 
-    y=lr_temp,  # Using LR as self-supervised target
-    batch_size=32, 
-    epochs=20, 
-    validation_split=0.2
-)
-'''
-'''
-# Generate high-resolution temperature predictions
-predicted_hr_temp = model.predict(
-    [lr_temp, np.concatenate([hr_elevation, hr_slope, hr_aspect], axis=-1), 
-        np.concatenate([months, years], axis=-1)]
-    )
-
-# Plot results
-plt.figure(figsize=(10,5))
-plt.subplot(1,2,1)
-plt.title("Low-Resolution Temperature")
-plt.imshow(lr_temp[0, :, :, 0], cmap="coolwarm")
-plt.subplot(1,2,2)
-plt.title("Predicted High-Resolution Temperature")
-plt.imshow(predicted_hr_temp[0, :, :, 0], cmap="coolwarm")
-plt.show()
 '''
