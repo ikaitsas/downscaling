@@ -19,11 +19,14 @@ import numpy as np
 import xarray as xr
 from osgeo import gdal
 from pathlib import Path
+import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
+import cartopy.feature as cfeature
+import matplotlib.ticker as mticker
 from skimage.measure import block_reduce
 
 
-target_res = 0.1  # in degrees
+target_res = 0.01  # in degrees
 input_dem = "output.tif"
 extent = [21, 39, 24, 36]  #W-N-E-S
 export_nc_to_device = True
@@ -85,6 +88,7 @@ for i,morphi in enumerate(morphography):
         #aspect filtering done later, to pass the flat surfaces
         #info (-9999 values) better to the aggregation?
         #idk if this is better, ill look into it
+        array_agg = np.nanmedian(reshaped, axis=(1, 3)).round()
         array[array<0] = -1
         array_agg[array_agg<0] = -1
     
@@ -116,6 +120,9 @@ for i,morphi in enumerate(morphography):
             )
         
         ds_nc[morphi] = (dims, array_agg)
+        
+        
+        
 
 netcdf_name = f"{dem_file_name}-morphography-{target_res}deg.nc"
 netcdf_path = os.path.join(cwd, "outputs", "python", netcdf_name)
@@ -126,6 +133,73 @@ ds_nc.to_netcdf(netcdf_path)
     
     
 #%% comments - extras
+for morphi in morphography:
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
+    
+    ax.add_feature(cfeature.LAKES.with_scale("50m"), 
+                   edgecolor="black")
+    
+    if morphi == "dem":
+        cmap=plt.cm.inferno_r
+        label = "Elevation [m]"
+        vmin, vmax = 0, np.nanmax(ds_nc[morphi].values)
+        
+    if morphi == "slope":
+        cmap=plt.cm.magma_r
+        label = "Slope [°]"
+        vmin, vmax = 0, np.nanmax(ds_nc[morphi].values)
+        
+    if morphi == "aspect":
+        cmap=plt.cm.twilight
+        label = "Aspect [°]"
+        vmin, vmax = -1, np.nanmax(ds_nc[morphi].values)
+    
+    #try the following with plt.pcolormesh() too
+    #it just needs longitude, latitude, 2d-array
+    #xr.plot assumes the center of the grid cell
+    #plt.imshow assumes the top-left corner
+    ds_nc[morphi].plot(
+        ax=ax, 
+        transform=ccrs.PlateCarree(), 
+        cmap=cmap, 
+        cbar_kwargs={"label": label},
+        vmin=vmin, vmax=vmax
+    )
+    
+    ax.coastlines(resolution="10m", linewidth=0.75)
+    ax.add_feature(cfeature.BORDERS, linestyle=":")
+    ax.add_feature(cfeature.LAND)
+    
+    gl = ax.gridlines(draw_labels=True, linestyle=":", 
+                      linewidth=0.5, color="k",
+                      xlocs=np.arange(
+                          extent[0], 
+                          extent[2], 
+                          0.1
+                          ),  #or: mticker.FixedLocator
+                      ylocs=np.arange(
+                          extent[1], 
+                          extent[3], 
+                          -0.1
+                          ) 
+                      )
+    gl.top_labels = False
+    gl.right_labels = False
+    #gl.xlabel_values = ds.longitude.values[::5]
+    #gl.ylabel_values = ds.latitude.values[::5]
+    '''
+    gl.xformatter = mticker.FuncFormatter(
+        lambda x, _: f"{x:.1f}" if x in ds.longitude.values[::5] else ""
+        )
+    gl.yformatter = mticker.FuncFormatter(
+        lambda y, _: f"{y:.1f}" if y in ds.latitude.values[::5] else ""
+        )
+    '''
+    ax.set_title(f'{morphi}-{target_res}deg')
+    plt.savefig(f'outputs\\images\\{morphi}-{target_res}deg.png', dpi=1000)
+    plt.show()
+    
+
 '''
 #very good aggregating method too, very readable
 #bu it can thandle NaN values

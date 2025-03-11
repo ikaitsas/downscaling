@@ -25,8 +25,8 @@ import matplotlib.ticker as mticker
 extent = [39, 21, 36, 24]
 years = list(range(1992,2023))
 timescale = 'monthly'
-visualize = False
-save_to_device = False
+visualize = True
+save_to_device = True
 
 
 # morphography files
@@ -265,19 +265,23 @@ if visualize == True:
 
     fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
     
+    ax.add_feature(cfeature.LAKES.with_scale("50m"), 
+                   edgecolor="black")
+    
     #try the following with plt.pcolormesh() too
+    #it just needs longitude, latitude, 2d-array
     #xr.plot assumes the center of the grid cell
     #plt.imshow assumes the top-left corner
     t2m.isel(valid_time=valid_time_index).plot(
         ax=ax, 
         transform=ccrs.PlateCarree(), 
         cmap=plt.cm.inferno, 
-        cbar_kwargs={"label": "Temperature (°C)"}
+        cbar_kwargs={"label": "Temperature (°C)"},
+        #vmin=-1, vmax=360
     )
     
     ax.coastlines(resolution="10m", linewidth=0.75)
     ax.add_feature(cfeature.BORDERS, linestyle=":")
-    ax.add_feature(cfeature.LAKES.with_scale("10m"))
     ax.add_feature(cfeature.LAND)
     
     gl = ax.gridlines(draw_labels=True, linestyle=":", 
@@ -306,6 +310,7 @@ if visualize == True:
         )
     '''
     ax.set_title(f"Temperature {np.datetime_as_string(ds.valid_time.values[valid_time_index], unit='M')}")
+    #ax.set_title('Tem')
     #plt.savefig('images-maps\\t2m-era5-land-cartopy.png', dpi=1000)
     plt.show()
     
