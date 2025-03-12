@@ -25,8 +25,9 @@ import matplotlib.ticker as mticker
 extent = [39, 21, 36, 24]
 years = list(range(1992,2023))
 timescale = 'monthly'
-visualize = True
-save_to_device = True
+visualize = False
+save_to_device = False
+extract_nn_training_data = False
 
 
 # morphography files
@@ -193,65 +194,66 @@ if save_to_device == True:
     t2mHD.to_netcdf("t2mHD.nc")
     
 
+if extract_nn_training_data == True:
 # Bring data to a tensor format
 # Create a CNN channel-based feature map
 # ilithios chatgtp tropos - tha to kanw me diko mou
 # alla se allh fash
-t2mLD = np.expand_dims(ds.t2m.to_numpy(), axis=-1)
-
-demHD_array = demHD.dem.to_numpy()
-demHD_array = np.repeat( 
-    np.expand_dims(demHD_array, axis=0), 
-    ds.valid_time.shape[0], axis=0
-    ) 
-demHD_array = np.expand_dims(demHD_array, axis=-1)
-
-slopeHD = np.repeat( 
-    np.expand_dims(
-        demHD.slope.values, 
-        axis=0), 
-    ds.valid_time.shape[0], axis=0
-    )
-slopeHD = np.expand_dims(slopeHD, axis=-1)
-
-aspectHD = np.repeat( 
-    np.expand_dims(
-        demHD.aspect.to_numpy(), 
-        axis=0), 
-    ds.valid_time.shape[0], axis=0
-    )
-aspectHD = np.expand_dims(aspectHD, axis=-1)
-
-lon, lat = np.meshgrid(demHD.longitude.values, demHD.latitude.values)
-
-lon = np.repeat(
-    np.expand_dims(lon, axis=0), 
-    ds.valid_time.shape[0], axis=0
-    )
-lon = np.expand_dims(lon, axis=-1)
-
-lat = np.repeat( 
-    np.expand_dims(lat, axis=0), 
-    ds.valid_time.shape[0], axis=0
-    )
-lat = np.expand_dims(lat, axis=-1)
-
-months = np.expand_dims(ds.valid_month.to_numpy(), axis=-1)
-years = np.expand_dims(ds.valid_year.to_numpy(), axis=-1)
-
-hd_aux = np.concatenate(
-    [lat, lon, demHD_array, slopeHD, aspectHD], 
-    axis=-1
-    )
-
-time_aux = np.concatenate([years, months], axis=-1)
-
-if save_to_device == True:
-    np.save("t2mLD-input.npy", t2mLD)
-    np.save("hd-auxilliary.npy", hd_aux)
-    np.save("time-auxilliary.npy", time_aux)
-# use t2mLD, hd_aux, time_aux for neural network building
-# and training - the rest are in some chatgtp convo...
+    t2mLD = np.expand_dims(ds.t2m.to_numpy(), axis=-1)
+    
+    demHD_array = demHD.dem.to_numpy()
+    demHD_array = np.repeat( 
+        np.expand_dims(demHD_array, axis=0), 
+        ds.valid_time.shape[0], axis=0
+        ) 
+    demHD_array = np.expand_dims(demHD_array, axis=-1)
+    
+    slopeHD = np.repeat( 
+        np.expand_dims(
+            demHD.slope.values, 
+            axis=0), 
+        ds.valid_time.shape[0], axis=0
+        )
+    slopeHD = np.expand_dims(slopeHD, axis=-1)
+    
+    aspectHD = np.repeat( 
+        np.expand_dims(
+            demHD.aspect.to_numpy(), 
+            axis=0), 
+        ds.valid_time.shape[0], axis=0
+        )
+    aspectHD = np.expand_dims(aspectHD, axis=-1)
+    
+    lon, lat = np.meshgrid(demHD.longitude.values, demHD.latitude.values)
+    
+    lon = np.repeat(
+        np.expand_dims(lon, axis=0), 
+        ds.valid_time.shape[0], axis=0
+        )
+    lon = np.expand_dims(lon, axis=-1)
+    
+    lat = np.repeat( 
+        np.expand_dims(lat, axis=0), 
+        ds.valid_time.shape[0], axis=0
+        )
+    lat = np.expand_dims(lat, axis=-1)
+    
+    months = np.expand_dims(ds.valid_month.to_numpy(), axis=-1)
+    years = np.expand_dims(ds.valid_year.to_numpy(), axis=-1)
+    
+    hd_aux = np.concatenate(
+        [lat, lon, demHD_array, slopeHD, aspectHD], 
+        axis=-1
+        )
+    
+    time_aux = np.concatenate([years, months], axis=-1)
+    
+    if save_to_device == True:
+        np.save("t2mLD-input.npy", t2mLD)
+        np.save("hd-auxilliary.npy", hd_aux)
+        np.save("time-auxilliary.npy", time_aux)
+    # use t2mLD, hd_aux, time_aux for neural network building
+    # and training - the rest are in some chatgtp convo...
     
 
 #%%

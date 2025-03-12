@@ -48,13 +48,13 @@ import matplotlib.ticker as mticker
 
 print('Importing Data...')
 dfLD = pd.read_parquet('df.parquet')
-dfHD = pd.read_parquet('dfHD.parquet')
+#dfHD = pd.read_parquet('dfHD.parquet')
 
 dfLD = dfLD[dfLD.valid_year<2020]
-dfHD = dfHD[dfHD.valid_year>=2020]
+#dfHD = dfHD[dfHD.valid_year>=2020]
 
 dfLD = dfLD.drop(columns=["valid_year"])
-dfHD = dfHD.drop(columns=["valid_year"])
+#dfHD = dfHD.drop(columns=["valid_year"])
 
 #dfLD = dfLD.drop(columns=["aspect"])
 #dfHD = dfHD.drop(columns=["aspect"])
@@ -101,13 +101,13 @@ if optimize_model == True:
     # might add a custom CV folding, for better representation
     # of time series data consistency?
     # for this reason, shuffling should be avoided...
-    kfold = KFold(n_splits=5, shuffle=False, random_state=None)
+    kfold = KFold(n_splits=10, shuffle=False, random_state=None)
     
     print("Performing BayesSearchCV...")
     bayes_search = BayesSearchCV(
         model,
         search_space,
-        n_iter=10,  
+        n_iter=100,  
         cv=kfold,  
         scoring="neg_mean_squared_error",
         n_jobs=1,  # -1 for all CPU cores
@@ -126,12 +126,12 @@ if optimize_model == True:
     print(bayes_search.best_params_)
     print("\nBest cross-validated score (negative MSE):")
     print(bayes_search.best_score_)
-    
+    '''
     print('\nTraining Best Model on the Whole Dataset...')
     
     best_model = bayes_search.best_estimator_
     best_model.fit(X, y)
-    
+    '''
 
 #%% sxolia
 '''
