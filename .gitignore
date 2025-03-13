@@ -16,3 +16,4 @@ land-cover-classification/data
 *.log
 *.vrt
 *.csv
+*.out

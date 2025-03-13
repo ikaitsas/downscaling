@@ -7,8 +7,12 @@ Created on Wed Jan 30 13:03:12 2025
 
 #True to train - else it imports a model
 train_model = True  
+save_trained_model = False
 
-model_imported = 'bestMhxanaki_ExtraTreesRegressor_RandomCV6.pkl'
+model_imported = (
+    'ExtraTreesRegressor_coraviates-'
+    'latitude-longitude-dem-slope-valid_year-valid_month.pkl'
+    )
 
 #True for mapping - else no mapping
 visualize = True  
@@ -22,7 +26,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from skimage.transform import resize
-from scipy.ndimage import distance_transform_edt
 
 os.environ['KERAS_BACKEND'] = 'tensorflow'
 #import keras  #needed for NNs
@@ -38,6 +41,7 @@ import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
+from matplotlib.ticker import MultipleLocator
 
 
 # this year and above apply the downscaling procedure
@@ -68,6 +72,9 @@ dfHD = dfHD[dfHD.valid_year>=downscaling_year]
 
 
 os.makedirs("images-maps", exist_ok=True)
+os.makedirs("modelakia", exist_ok=True)
+
+
 dsLD = xr.open_dataset("t2m.nc")
 dsLD["t2m"] = dsLD.t2m - 273.15
 
@@ -114,12 +121,13 @@ if train_model == True:
     best_model.fit(X_train, y_train)
     
     
-'''
+
 # model gets imported
 else:
     print('Predicting Using Imported Model...')
-    best_model = joblib.load(model_imported)
-'''
+    model_imported_path = os.path.join("modelakia", model_imported)
+    best_model = joblib.load(model_imported_path)
+
     
     
 # GIA CV THELEI OLO TO SET - GIA KANONIKA TO TEST - DIORTHWSE TO
@@ -138,9 +146,14 @@ print('Feature Importance:')
 for i,feature in enumerate(features_in_model):
     print(f'{feature}:  {np.round(100*feature_importances[i],3)} %')
 
+
 covariates = "-".join(features_in_model)
 model_name = f'{type(best_model).__name__}_coraviates-{covariates}.pkl'
-#joblib.dump(best_model, model_name)
+
+if train_model == True:
+    model_path = os.path.join("modelakia", model_name)
+    if save_trained_model == True:
+        joblib.dump(best_model, model_path)
 
 #dfLD["t2m_pred"] = best_model.predict(dfLD.loc[:,train_cols])
 
@@ -191,8 +204,12 @@ dsHD["t2mHD"] = t2mHD
 print("Done.")
 
 
-#%% peiramata
-res = dfLD.loc[dfLD.valid_year>=2020,:].copy()
+#%% residual fitting
+# res contains coarse resolution data corresponding to
+# downscaling_year, to extract the coarse resolution 
+# residuals, and downscale them by bilinear interpolation
+print("Fitting Residuals on Coarse Data...")
+res = dfLD.loc[dfLD.valid_year>=downscaling_year,:].copy()
 
 res["t2m_pred"] = best_model.predict(res.loc[:,train_cols])
 res['t2m_pred'] = res['t2m_pred'].where(res['t2m'].notna())
@@ -341,14 +358,16 @@ def fill_adjacent_nans_with_edges(grid):
     return grid
 
 
+print("Extracting High Resolution Residuals...")
+print("Using Bilinear Interpolation...")
 latHD_shape = dsHD.latitude.shape[0]
 lonHD_shape = dsHD.longitude.shape[0]
 
 # fill NaNs with 0
-resLD_filled = np.nan_to_num(resLD.residual.to_numpy(), nan=0)  
+resLD_filled = np.nan_to_num(resLD.resLD.to_numpy(), nan=0)  
 # fill NaNs with the closest neighbours
-resLD_filled1 = fill_adjacent_nans_3d(resLD.residual.to_numpy())
-resLD_filled2 = fill_adjacent_nans_with_edges(resLD.residual.to_numpy())
+resLD_filled1 = fill_adjacent_nans_3d(resLD.resLD.to_numpy())
+resLD_filled2 = fill_adjacent_nans_with_edges(resLD.resLD.to_numpy())
 
 
 resHD = np.array([
@@ -361,141 +380,92 @@ resHD[np.isnan(dsHD.t2mLDonHD.values)] = np.nan
 resHD = xr.DataArray(resHD, dims=dsHD.dims, coords=dsHD.coords)
 dsHD["resHD"] = resHD
 
+print("Done.")
+
 
 #%% optikopoihsh
 degree_spacing = 0.1
 temporal_idx = 11
+
 if visualize == True:
-    temp_pred = dsHD.t2mHD 
-    temp_res = dsHD.t2mHD + dsHD.resHD 
-    tempLD = resLD.t2m 
-    tempLD_pred = resLD.t2m_predLD
+    
+    t2m_pred = dsHD.t2mHD 
+    t2m_res = dsHD.t2mHD + dsHD.resHD 
+    t2mLD = resLD.t2m 
+    t2mLD_pred = resLD.t2m_predLD
     times = dsHD.valid_time.values
+    
     print('Mapping...')
 
-    fig, ax = plt.subplots(
-        #nrows=1, ncols=2,
-        subplot_kw={"projection": ccrs.PlateCarree()}
+    # order: t2mLD, t2mLD_pred, t2m_pred, t2m_res
+    # dont change the order of the above
+    # or change it everywhere the same below!
+    titles = [
+        (f"Low Resolution Predicted T2m "
+         f"{np.datetime_as_string(times[temporal_idx], unit='M')}"
+         ),
+        (f"ERA5-Land T2m "
+         f"{np.datetime_as_string(times[temporal_idx], unit='M')}"
+         ),
+        (f"Downscaled T2m "
+         f"{np.datetime_as_string(times[temporal_idx], unit='M')}"
+         ),
+        (f"Residual Corrected Downscaled T2m "
+         f"{np.datetime_as_string(times[temporal_idx], unit='M')}"
+         )
+        ]
+    
+    mins = [
+        np.nanmin(t2mLD_pred.values[temporal_idx,:,:]),
+        np.nanmin(t2mLD.values[temporal_idx,:,:]),
+        np.nanmin(t2m_pred.values[temporal_idx,:,:]),
+        np.nanmin(t2m_res.values[temporal_idx,:,:])
+        ]
+    maxes = [
+        np.nanmax(t2mLD_pred.values[temporal_idx,:,:]),
+        np.nanmax(t2mLD.values[temporal_idx,:,:]),
+        np.nanmax(t2m_pred.values[temporal_idx,:,:]),
+        np.nanmax(t2m_res.values[temporal_idx,:,:])
+        ]
+    
+    fig, axes = plt.subplots(
+        2, 2, 
+        figsize=(12, 12), 
+        subplot_kw={'projection': ccrs.PlateCarree()}
         )
     
-    ax.add_feature(cfeature.LAKES.with_scale("50m"), 
-                   edgecolor="black")
+    vmin = np.floor(np.min(mins))
+    vmax = np.ceil(np.max(maxes))
     
-    #try the following with plt.pcolormesh() too
-    #it just needs longitude, latitude, 2d-array
-    #xr.plot assumes the center of the grid cell
-    #plt.imshow assumes the top-left corner
-    temp_res.isel(valid_time=temporal_idx).plot(
-        ax=ax, 
-        transform=ccrs.PlateCarree(), 
-        cmap=plt.cm.inferno, 
-        cbar_kwargs={"label": "Temperature (°C)"},
-        vmin=-1, vmax=15
-    )
-    
-    ax.coastlines(resolution="10m", linewidth=0.75)
-    ax.add_feature(cfeature.BORDERS, linestyle=":")
-    ax.add_feature(cfeature.LAND)
-    
-    gl = ax.gridlines(draw_labels=True, linestyle=":", 
-                      linewidth=0.5, color="k",
-                      xlocs=np.arange(
-                          dfLD.longitude.min(), 
-                          dfLD.longitude.max(), 
-                          degree_spacing
-                          ),  #or: mticker.FixedLocator
-                      ylocs=np.arange(
-                          dfLD.latitude.max(), 
-                          dfLD.latitude.min(), 
-                          -degree_spacing
-                          ) 
-                      )
-    gl.top_labels = False
-    gl.right_labels = False
-    #gl.xlabel_values = ds.longitude.values[::5]
-    #gl.ylabel_values = ds.latitude.values[::5]
-    '''
-    gl.xformatter = mticker.FuncFormatter(
-        lambda x, _: f"{x:.1f}" if x in ds.longitude.values[::5] else ""
-        )
-    gl.yformatter = mticker.FuncFormatter(
-        lambda y, _: f"{y:.1f}" if y in ds.latitude.values[::5] else ""
-        )
-    '''
-    #'''
-    ax.set_title(
-    (f"Downscaled Temperature "
-     f"{np.datetime_as_string(times[temporal_idx], unit='M')}"
-     )
-        )
-    #'''
-    #ax.set_title('Corrected Downscaled Temperature - 2020-12')
-    '''
-    plt.savefig(
-        os.path.join(
-            "images-maps", 
-            f't2m-era5-land-{model_name}.png'
-            ),
-        dpi=1000
-        )
-    '''
-    plt.show()
-    
-    #t2m = None
+    for ax, da, title in zip(
+            axes.flat, 
+            [t2mLD_pred,t2mLD,t2m_pred,t2m_res], 
+            titles
+            ):
+        
+        img = da.isel(valid_time=temporal_idx).plot.pcolormesh(
+            ax=ax, cmap='inferno', transform=ccrs.PlateCarree(),
+            vmin=vmin, vmax=vmax, add_colorbar=False
+            )
 
-
-
-
-#%% sxolia
-'''
-# model is additionally optimized
-if optimize_model == True:
-    model = ExtraTreesRegressor(random_state=42)
-    print(f'\nModel Used: {type(model).__name__}')
-    print('Starting Hyperparameter Optimization...')
-    time_start = time.time()
+        ax.coastlines()
+        ax.set_title(title)
+        
+        gl = ax.gridlines(
+            draw_labels=True, linewidth=0.5, linestyle="--", color="gray"
+            )
+        gl.xlocator = MultipleLocator(0.1)
+        gl.ylocator = MultipleLocator(0.1)
+        gl.top_labels = False
+        gl.right_labels = False
     
-    param_grid = {
-        'n_estimators': [25, 50, 100],
-        'max_depth': [None, 10, 20, 30],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4, 10, 20],
-        'max_features': ['sqrt', 'log2', None, 0.3]
-    }
+    fig.subplots_adjust(right=0.9)
+    cbar_ax = fig.add_axes([0.92, 0.11, 0.04, 0.78])
+    cbar = fig.colorbar(img, cax=cbar_ax)
+    cbar.set_label("Temperature [°C]")
     
-    kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+    #plt.tight_layout()  
+    plt.savefig("multiplot.png", dpi=1000, bbox_inches="tight")
+    plt.show() 
     
-    print("Performing RandomizedSearchCV...")
-    random_search = RandomizedSearchCV(
-        estimator=model,
-        param_distributions=param_grid, #param_distributions for RandomCV
-        n_iter=50,  # Number of parameter settings sampled
-        cv=kfold,
-        scoring='neg_mean_squared_error',  #might also try MAE
-        verbose=3,
-        random_state=42, #enable for RandomCV
-        n_jobs=1
-    )
-    #mallon tha kanw bayesian optimization sto mellon...
-    #gia kfold=5/n_iter=3 thelei 180sec konta...
-    #an einai analogo, thelw polla parapanw gia exhaustive search...
-    #mporei na dokimasw bayesian optimization kapoia stigmh...
-    #verbose only works for n_jobs=1 (others might work on linux?)
     
-    random_search.fit(X_train, y_train)
-    
-    time_end = time.time()
-    print(f"Hyperparameter Optimization Runtime: {time_end-time_start:.2f} s")
-    
-    print("\nBest parameters found by RandomizedSearchCV:")
-    print(random_search.best_params_)
-    print("\nBest cross-validated score (negative MSE):")
-    print(random_search.best_score_)
-    
-    print('\nTraining Best Model on the Whole Dataset...')
-    
-    best_model = random_search.best_estimator_
-    best_model.fit(X, y)
-'''
-
-
