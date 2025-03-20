@@ -85,8 +85,8 @@ if optimize_model == True:
     time_start = time.time()
     
     search_space = {
-        "n_estimators": Integer(25, 100),  
-        "max_depth": Categorical([None] + list(range(2, 25,4))),  
+        "n_estimators": Integer(10, 250),  
+        "max_depth": Categorical([None] + list(range(2, 25, 4))),  
         "min_samples_split": Integer(2, 20),  
         "min_samples_leaf": Integer(1, 20),  
         "max_features": Categorical(
@@ -94,7 +94,7 @@ if optimize_model == True:
                 np.round(np.arange(0.1,1.21,0.3),2)
                 )
             ),  
-        #"bootstrap": Categorical([True, False])  
+        "bootstrap": Categorical([True, False])  
     }
     
     

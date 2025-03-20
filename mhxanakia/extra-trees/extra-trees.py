@@ -73,6 +73,7 @@ dfHD = dfHD[dfHD.valid_year>=downscaling_year]
 
 os.makedirs("images-maps", exist_ok=True)
 os.makedirs("modelakia", exist_ok=True)
+os.makedirs("output-nc-files", exist_ok=True)
 
 
 dsLD = xr.open_dataset("t2m.nc")
@@ -383,6 +384,15 @@ dsHD["resHD"] = resHD
 print("Done.")
 
 
+#%% export to device
+resLD.to_netcdf(
+    os.path.join("output-nc-files", "outputs_low_resolution_model.nc")
+    )
+dsHD.to_netcdf(
+    os.path.join("output-nc-files", "outputs_high_resolution_model.nc")
+    )
+
+
 #%% optikopoihsh
 degree_spacing = 0.1
 temporal_idx = 11
@@ -465,7 +475,7 @@ if visualize == True:
     cbar.set_label("Temperature [°C]")
     
     #plt.tight_layout()  
-    plt.savefig("multiplot.png", dpi=1000, bbox_inches="tight")
+    #plt.savefig("multiplot.png", dpi=1000, bbox_inches="tight")
     plt.show() 
     
     

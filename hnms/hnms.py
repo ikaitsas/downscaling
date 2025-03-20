@@ -18,6 +18,7 @@ parameter = 1 #0:RR, 1:TG, 2:TN, 3:TX
 station = 16606  #other options available
 
 extent = [39, 21, 36, 24]  #N-W-S-E
+coarse_resolution = 0.1  #degrees
 year_start = 1992
 year_end = 2022
 
@@ -61,10 +62,10 @@ df = pd.read_csv(path, index_col=0, parse_dates=True)
 
 hnms = pd.read_excel("HNMS_Stations_Info.xlsx")
 
-hnms_extent = hnms[(hnms.iloc[:,3]>=extent[1]) & #W
-                   (hnms.iloc[:,3]<extent[-1]) & #E
-                   (hnms.iloc[:,2]>extent[-2]) & #S
-                   (hnms.iloc[:,2]<=extent[0])   #N
+hnms_extent = hnms[(hnms.iloc[:,3]>=extent[1]-coarse_resolution/2) & #W
+                   (hnms.iloc[:,3]<extent[-1]-coarse_resolution/2) & #E
+                   (hnms.iloc[:,2]>extent[-2]+coarse_resolution/2) & #S
+                   (hnms.iloc[:,2]<=extent[0]+coarse_resolution/2)   #N
                    ]
 
 
