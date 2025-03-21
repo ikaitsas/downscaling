@@ -29,56 +29,6 @@ target = (38.88,21.17)
 resolution=0.1
 dataarray = ld.t2m
 
-# NEED TO INCORPORATE THE TEMPORAL INDEX IN THE FUNCTIONS
-# BECAUSE IT IS UPLOADED MANUALLY IN GET_KNOWN_POINTS
-
-
-
-def get_bounding_square(target, resolution):
-    """
-    returns the latitude and longitude tuples of the
-    specified target tuple in the IDW function
-    
-    TODO:
-    if the tareget is lat/lon aligned, take the 6 surrounding
-    points, not just the 2 in the line, as per Argiriou said
-    """
-    x, y = target  # Latitude and Longitude
-    
-    lower_lat = np.floor(x / resolution) * resolution
-    upper_lat = lower_lat + resolution
-    
-    lower_lon = np.floor(y / resolution) * resolution
-    upper_lon = lower_lon + resolution
-    
-    lat_aligned = np.isclose(x, lower_lat)
-    lon_aligned = np.isclose(y, lower_lon)
-    
-    # Case 1: The target is exactly on a grid point → Return that point
-    if lat_aligned and lon_aligned:
-        return [(x,y)]
-    
-    # Case 2: Only latitude is aligned → Return the left and right longitudes
-    if lat_aligned:
-        return [
-            (x, lower_lon),  # Left point
-            (x, upper_lon),  # Right point
-        ]
-    
-    # Case 3: Only longitude is aligned → Return the above and below latitudes
-    if lon_aligned:
-        return [
-            (lower_lat, y),  # Below point
-            (upper_lat, y),  # Above point
-        ]
-    
-    # Case 4: Neither latitude nor longitude is aligned → Return full  square
-    return [
-        (upper_lat, lower_lon),  # Upper left
-        (upper_lat, upper_lon),  # Upper right
-        (lower_lat, upper_lon),  # Lower right
-        (lower_lat, lower_lon),  # Lower left
-    ]
 
 
 def find_bounding_box(target, dataarray):
@@ -92,6 +42,7 @@ def find_bounding_box(target, dataarray):
     IN THIS CASE RETURN A SIZE-2 LIST IF ONLY LAT/LON IS ON EDGE
     IF BOTH ARE ON EDGE, A SIZE-1 LIST
     MAYBE WILL HANDLE THOSE INSIDE THE ALIGNMENT CASES?
+    OR BY KEEPING THE UNIQUE ELEMENTS OF THE LIST?
     """
     target_lat, target_lon = target
     
@@ -129,10 +80,9 @@ def find_bounding_box(target, dataarray):
     np.isclose(target_lon, lower_lon, rtol=1e-6)
     
     if lat_aligned and lon_aligned:
-        
-        return [(target_lat, target_lon)]
+        box = [(target_lat, target_lon)]
     
-    if lat_aligned :
+    elif lat_aligned :
         lat_idx = np.where(
             np.abs(latitudes-target_lat) == \
             np.min(np.abs(latitudes-target_lat))
@@ -140,7 +90,7 @@ def find_bounding_box(target, dataarray):
         lat_above = latitudes[max(lat_idx - 1, 0)]
         lat_below = latitudes[min(lat_idx + 1, len(latitudes) - 1)]
         
-        return [
+        box = [
             (lat_above, lower_lon),  # Top-left
             (lat_above, upper_lon),  # Top-right
             (target_lat, upper_lon), # Center-right
@@ -149,7 +99,7 @@ def find_bounding_box(target, dataarray):
             (target_lat, lower_lon)   # Center-left
         ]
     
-    if lon_aligned:
+    elif lon_aligned:
         lon_idx = np.where(
             np.abs(longitudes-target_lon) == \
             np.min(np.abs(longitudes-target_lon))
@@ -157,7 +107,7 @@ def find_bounding_box(target, dataarray):
         lon_below = longitudes[max(lon_idx - 1, 0)]
         lon_above = longitudes[min(lon_idx + 1, len(longitudes) - 1)]
 
-        return [
+        box = [
             (upper_lat, lon_below),  # Top-left
             (upper_lat, target_lon),  # Top-center
             (upper_lat, lon_above), # Top-right
@@ -166,15 +116,21 @@ def find_bounding_box(target, dataarray):
             (lower_lat, lon_below)   # Center-left
         ]
     
-    return [
-        (upper_lat, lower_lon),  # Upper left
-        (upper_lat, upper_lon),  # Upper right
-        (lower_lat, upper_lon),  # Lower right
-        (lower_lat, lower_lon),  # Lower left
-    ]
+    else:
+        # Standard case, with no alignment
+        box = [
+            (upper_lat, lower_lon),  # Top-left
+            (upper_lat, upper_lon),  # Top-right
+            (lower_lat, upper_lon),  # Bottom-right
+            (lower_lat, lower_lon),  # Bottom-left
+        ]
+    
+    box = list(dict.fromkeys(box))
+    
+    return box
 
 
-def get_known_points(target, dataarray, resolution, timestamp):
+def get_box_values(target, dataarray, timestamp):
     """
     Extracts temperature values from the dataset for the bounding square points
     and returns them in the format needed for IDW interpolation.
@@ -188,7 +144,7 @@ def get_known_points(target, dataarray, resolution, timestamp):
     Returns:
         list: Known points in the format [((lat, lon), value), ...]
     """
-    bounding_points = get_bounding_square(target, resolution)
+    bounding_points = find_bounding_box(target, dataarray)
     known_points = []
 
     for lat, lon in bounding_points:
@@ -204,10 +160,7 @@ def get_known_points(target, dataarray, resolution, timestamp):
     return known_points
 
 
-def idw_interpolation(
-        target, dataarray, resolution, timestamp,
-        power=2, native_resolution=0.1
-        ):
+def idw_interpolation(target, dataarray, timestamp, power=2):
     """
     Calculates interpolated value at a target location using 
     Inverse Distance Weighting (IDW).
@@ -220,22 +173,19 @@ def idw_interpolation(
 
     Returns:
         float: Interpolated value at the target location.
-        
-    ADD EDGE HANDLING, WHERE TARGET IS OUTSIDE DATAARRAY BOUNDS
     """
+    resolution = np.round(np.diff(dataarray.longitude.values)[0],5)
     # Check if target lies outside of dataarray bounds
     if (
-        target[0] > dataarray.latitude.values.max()+native_resolution/2 or
-        target[0] < dataarray.latitude.values.min()-native_resolution/2 or
-        target[1] > dataarray.longitude.values.max()+native_resolution/2 or
-        target[1] < dataarray.longitude.values.min()-native_resolution/2
+        target[0] > dataarray.latitude.values.max()+resolution/2 or
+        target[0] < dataarray.latitude.values.min()-resolution/2 or
+        target[1] > dataarray.longitude.values.max()+resolution/2 or
+        target[1] < dataarray.longitude.values.min()-resolution/2
     ):
         print("Target is out of Dataarray Bounds.")
         return None
     
-    known_points = get_known_points(
-        target, dataarray, resolution, timestamp
-        )
+    known_points = get_box_values(target, dataarray, timestamp)
     if not known_points:
         print("No known points detected...")
         return None
@@ -289,10 +239,7 @@ def idw_interpolation(
     return interpolated_value / total_weight
 
 
-def idw_interpolation_across_time(
-        target, dataarray, resolution,
-        power=2, native_resolution=0.1
-        ):
+def idw_interpolation_across_time(target, dataarray, power=2):
     """
     Applies Inverse Distance Weighting (IDW) interpolation for a target 
     location across the entire valid_time axis of the dataarray.
@@ -303,18 +250,18 @@ def idw_interpolation_across_time(
         latitude, and longitude dimensions.
         resolution (float): Resolution of known points selection.
         power (int): Power parameter for IDW (default=2).
-        native_resolution (float): Buffer zone for boundary checking 
-        (default=0.1).
 
     Returns:
         xarray.DataArray: Interpolated values across valid_time.
     """
+    resolution = np.round(np.diff(dataarray.longitude.values)[0],5)
+
     # Check if target lies outside of dataarray bounds
     if (
-        target[0] > dataarray.latitude.values.max() + native_resolution / 2 or
-        target[0] < dataarray.latitude.values.min() - native_resolution / 2 or
-        target[1] > dataarray.longitude.values.max() + native_resolution / 2 or
-        target[1] < dataarray.longitude.values.min() - native_resolution / 2
+        target[0] > dataarray.latitude.values.max()+resolution/2 or
+        target[0] < dataarray.latitude.values.min()-resolution/2 or
+        target[1] > dataarray.longitude.values.max()+resolution/2 or
+        target[1] < dataarray.longitude.values.min()-resolution/2
     ):
         print("Target is out of Dataarray Bounds.")
         return None
@@ -322,9 +269,7 @@ def idw_interpolation_across_time(
     interpolated_values = np.full((len(dataarray.valid_time), 1, 1), np.nan)  
     
     for timestamp in range(len(dataarray.valid_time)):
-        known_points = get_known_points(
-            target, dataarray, resolution, timestamp
-            )
+        known_points = get_box_values(target, dataarray, timestamp)
         if not known_points:
             interpolated_values.append(np.nan)
             continue
@@ -383,17 +328,15 @@ def idw_interpolation_across_time(
 
 
 #%% play
-target = (38.8388,23.1)
 temp_target = idw_interpolation(
-        target=target, dataarray=ld.t2m, resolution=0.1, 
+        target=target, dataarray=ld.t2m, 
         timestamp=temporal_idx,
-        power=2, native_resolution=0.1
+        power=2
         )
 print(f'Temperature at target: {temp_target:.2f}')
 
 interp = idw_interpolation_across_time(
-        target=target, dataarray=ld.t2m, resolution=0.1,
-        power=2, native_resolution=0.1
+        target=target, dataarray=ld.t2m ,power=2
         )
 for time,value in zip(interp.valid_time.values,interp.values):
     print(time,value)
