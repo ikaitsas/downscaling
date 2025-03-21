@@ -25,6 +25,12 @@ hd = xr.open_dataset("outputs_high_resolution_model.nc")
 
 visualize = True
 temporal_idx = 11
+target = (38.88,21.17)
+resolution=0.1
+dataarray = ld.t2m
+
+# NEED TO INCORPORATE THE TEMPORAL INDEX IN THE FUNCTIONS
+# BECAUSE IT IS UPLOADED MANUALLY IN GET_KNOWN_POINTS
 
 
 
@@ -33,9 +39,9 @@ def get_bounding_square(target, resolution):
     returns the latitude and longitude tuples of the
     specified target tuple in the IDW function
     
-    should be fed to a temperature/value assignment
-    function, to extract temperatures from the grids
-    at those locations
+    TODO:
+    if the tareget is lat/lon aligned, take the 6 surrounding
+    points, not just the 2 in the line, as per Argiriou said
     """
     x, y = target  # Latitude and Longitude
     
@@ -74,7 +80,8 @@ def get_bounding_square(target, resolution):
         (lower_lat, lower_lon),  # Lower left
     ]
 
-def get_known_points(target, dataarray, resolution):
+
+def get_known_points(target, dataarray, resolution, timestamp):
     """
     Extracts temperature values from the dataset for the bounding square points
     and returns them in the format needed for IDW interpolation.
@@ -83,6 +90,7 @@ def get_known_points(target, dataarray, resolution):
         target (tuple): Target location as (latitude, longitude).
         dataset (xarray.Dataset): Xarray dataset containing temperature values.
         resolution (float): Grid resolution.
+        timestamp (int): index of time dimension to perform the interpolation.
 
     Returns:
         list: Known points in the format [((lat, lon), value), ...]
@@ -93,7 +101,7 @@ def get_known_points(target, dataarray, resolution):
     for lat, lon in bounding_points:
         # Extract the temperature value at this lat, lon
         temp_value = dataarray.sel(
-            valid_time = dataarray.valid_time[temporal_idx],
+            valid_time = dataarray.valid_time[timestamp],
             latitude=lat, 
             longitude=lon, 
             method="nearest"
@@ -103,9 +111,12 @@ def get_known_points(target, dataarray, resolution):
     return known_points
 
 
-def idw_interpolation__(target, known_points, power=2):
+def idw_interpolation(
+        target, dataarray, resolution, timestamp,
+        power=2, native_resolution=0.1
+        ):
     """
-    Calculates precipitation interpolated value at a target location using Inverse Distance Weighting (IDW).
+    Calculates interpolated value at a target location using Inverse Distance Weighting (IDW).
 
     Parameters:
         target (tuple): Target location as (latitude, longitude).
@@ -114,7 +125,22 @@ def idw_interpolation__(target, known_points, power=2):
 
     Returns:
         float: Interpolated value at the target location.
+        
+    ADD EDGE HANDLING, WHERE TARGET IS OUTSIDE DATAARRAY BOUNDS
     """
+    # Check if target lies outside of dataarray bounds
+    if (
+        target[0] > dataarray.latitude.values.max()+native_resolution/2 or
+        target[0] < dataarray.latitude.values.min()-native_resolution/2 or
+        target[1] > dataarray.longitude.values.max()+native_resolution/2 or
+        target[1] < dataarray.longitude.values.min()-native_resolution/2
+    ):
+        print("Target is out of Dataarray Bounds.")
+        return None
+    
+    known_points = get_known_points(
+        target, dataarray, resolution, timestamp
+        )
     if not known_points:
         print("No known points detected...")
         return None
@@ -123,6 +149,7 @@ def idw_interpolation__(target, known_points, power=2):
     weights = []
     interpolated_value = 0
     distances = []
+    values = []
     
     # Find distance of each known point from the target
     for (lat, lon), value in known_points:
@@ -134,68 +161,7 @@ def idw_interpolation__(target, known_points, power=2):
         cos_lat = math.cos(math.radians(avg_lat))
         distance = math.sqrt(delta_lat ** 2 + (cos_lat * delta_lon) ** 2)
         distances.append(distance)
-        
-    # Perform the interpolation  
-    for distance, value in zip(distances, known_points):
-        # If value=nan, skip the weigting (value[1] is temp)
-        if np.isnan(value[1]):
-            continue
-        weight = 1 / (distance ** power)
-        weights.append(weight)
-        total_weight += weight
-        interpolated_value += weight * value[1]
-        
-        # Avoid division by zero if distance is very small
-        if distance == 0:
-            return value
-    
-    # Find the known point with minimum distance from the target
-    # If it is nan, then make the target nan
-    # I think this is better than quadrant identification
-    min_distance_index = distances.index(min(distances))
-    closest_point = known_points[min_distance_index]
-    if np.isnan(closest_point[1]):
-        interpolated_value = np.nan
-    
-    #total_weight = sum(weights)
-    if total_weight == 0:
-        return  np.nan
-    
-    return interpolated_value / total_weight
-
-
-def idw_interpolation(target, dataarray, resolution, power=2):
-    """
-    Calculates precipitation interpolated value at a target location using Inverse Distance Weighting (IDW).
-
-    Parameters:
-        target (tuple): Target location as (latitude, longitude).
-        known_points (list of tuples): List of known points with ((lat, lon), value).
-        power (int): Power parameter for IDW (default=2).
-
-    Returns:
-        float: Interpolated value at the target location.
-    """
-    known_points = get_known_points(target, dataarray, resolution)
-    if not known_points:
-        print("No known points detected...")
-        return None
-    
-    total_weight = 0
-    weights = []
-    interpolated_value = 0
-    distances = []
-    
-    # Find distance of each known point from the target
-    for (lat, lon), value in known_points:
-        delta_lat = target[0] - lat
-        delta_lon = target[1] - lon
-        avg_lat = (target[0] + lat) / 2
-
-        # Adjust longitude using cos(latitude)
-        cos_lat = math.cos(math.radians(avg_lat))
-        distance = math.sqrt(delta_lat ** 2 + (cos_lat * delta_lon) ** 2)
-        distances.append(distance)
+        values.append(value)
         
     # Perform the interpolation  
     for distance, value in zip(distances, known_points):
@@ -226,6 +192,16 @@ def idw_interpolation(target, dataarray, resolution, power=2):
         return  np.nan
     
     return interpolated_value / total_weight
+
+
+#%% play
+target = (38.88,21.17)
+temp_target = idw_interpolation(
+        target=target, dataarray=ld.t2m, resolution=0.1, 
+        timestamp=temporal_idx,
+        power=2, native_resolution=0.1
+        )
+print(f'Temperature at target: {temp_target:.2f}')
 
 
 #%% optikopoihsh
