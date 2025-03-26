@@ -27,7 +27,8 @@ visualize = True
 temporal_idx = 11
 target = (38.88,21.17)
 resolution=0.1
-dataarray = ld.t2m
+dataarrayLD = ld.t2m
+dataarrayHD = hd.t2mHD + hd.resHD
 
 
 
@@ -315,6 +316,10 @@ def idw_interpolation_across_time(target, dataarray, power=2):
             (len(dataarray.valid_time), 1, 1), 
             np.nan
             )
+    
+    dataarray_name = dataarray.name
+    if dataarray_name is None:
+        dataarray_name = 't2m'
             
     return xr.DataArray(
         interpolated_values, 
@@ -323,7 +328,8 @@ def idw_interpolation_across_time(target, dataarray, power=2):
             "latitude": [target[0]], 
             "longitude": [target[1]]
         }, 
-        dims=["valid_time", "latitude", "longitude"]
+        dims=["valid_time", "latitude", "longitude"],
+        name=dataarray_name
     )
 
 
@@ -433,3 +439,40 @@ if visualize == True:
     #plt.tight_layout()  
     #plt.savefig("multiplot.png", dpi=1000, bbox_inches="tight")
     plt.show() 
+
+
+#%% paidikh xara
+for i in range(len(stations)):
+    station = stations.iloc[i]
+    
+    station_code = station.iloc[1]
+    station_name = station.iloc[2]
+    
+    station_location = ( station.iloc[3], station.iloc[4] )
+    
+    seriesLD = idw_interpolation_across_time(
+        target=station_location, dataarray=dataarrayLD
+        ).to_series()
+    
+    seriesHD = idw_interpolation_across_time(
+        target=station_location, dataarray=dataarrayHD
+        ).to_series()
+    
+    seriesSITE = insitu.loc[
+        insitu.index.isin(hd.valid_time.values), str(station_code)
+        ]
+    
+    
+    plt.plot(hd.valid_time.values, seriesLD, linestyle="--")
+    plt.plot(hd.valid_time.values, seriesSITE, c="r", alpha=0.75)
+    plt.plot(hd.valid_time.values, seriesHD, c="k")
+    plt.title(f'2m Temperature - {station_name}')
+    plt.legend(["IDW", "In-situ", "Downscaled"], prop={'size': 7}, framealpha=0.3)
+    plt.xticks(rotation=30)
+    plt.grid()
+    plt.savefig(f'timeseries-{station_name}.png', dpi=300)
+    plt.show()
+
+
+
+
