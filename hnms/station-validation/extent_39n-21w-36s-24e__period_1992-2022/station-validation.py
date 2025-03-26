@@ -25,9 +25,8 @@ hd = xr.open_dataset("outputs_high_resolution_model.nc")
 
 visualize = True
 temporal_idx = 11
-target = (38.88,21.17)
-resolution=0.1
-dataarray = ld.t2m
+target = (37.5247,22.3972)  # Tripoli
+dataarray = hd.t2mHD + hd.resHD
 
 
 
@@ -37,12 +36,6 @@ def find_bounding_box(target, dataarray):
     if the target is right on top of a grid point, return target only
     if it is latitude/longitude aligned, return a bounding box of 6 points
     if it not aligned, return a 4 point square bounding box
-    
-    ADD EDGE HANDLING, WHERE THE TARGET LIES INSIDE THE EDGE GRID
-    IN THIS CASE RETURN A SIZE-2 LIST IF ONLY LAT/LON IS ON EDGE
-    IF BOTH ARE ON EDGE, A SIZE-1 LIST
-    MAYBE WILL HANDLE THOSE INSIDE THE ALIGNMENT CASES?
-    OR BY KEEPING THE UNIQUE ELEMENTS OF THE LIST?
     """
     target_lat, target_lon = target
     
@@ -315,6 +308,10 @@ def idw_interpolation_across_time(target, dataarray, power=2):
             (len(dataarray.valid_time), 1, 1), 
             np.nan
             )
+    
+    dataarray_name = dataarray.name
+    if dataarray_name is None:
+        dataarray_name = 't2m'
             
     return xr.DataArray(
         interpolated_values, 
@@ -323,20 +320,20 @@ def idw_interpolation_across_time(target, dataarray, power=2):
             "latitude": [target[0]], 
             "longitude": [target[1]]
         }, 
-        dims=["valid_time", "latitude", "longitude"]
+        dims=["valid_time", "latitude", "longitude"],
+        name = dataarray_name
     )
 
 
 #%% play
 temp_target = idw_interpolation(
         target=target, dataarray=ld.t2m, 
-        timestamp=temporal_idx,
-        power=2
+        timestamp=temporal_idx
         )
 print(f'Temperature at target: {temp_target:.2f}')
 
 interp = idw_interpolation_across_time(
-        target=target, dataarray=ld.t2m ,power=2
+        target=target, dataarray=ld.t2m
         )
 for time,value in zip(interp.valid_time.values,interp.values):
     print(time,value)
@@ -433,3 +430,34 @@ if visualize == True:
     #plt.tight_layout()  
     #plt.savefig("multiplot.png", dpi=1000, bbox_inches="tight")
     plt.show() 
+
+
+#%% lets play
+station = stations.iloc[0,:]
+
+station_code = station.iloc[1]
+station_name = station.iloc[2]
+
+station_location = (station.iloc[3], station.iloc[4])
+
+series = idw_interpolation_across_time(
+    target=station_location, dataarray=dataarray
+    )
+
+
+
+
+
+'''
+plt.scatter(hd.valid_time.values,tripoliDS.t2m, linestyle="--")
+plt.scatter(hd.valid_time.values,tripoliHD.t2m, c="k")
+plt.scatter(hd.valid_time.values, tripoliSIT, c="red", alpha=0.75)
+plt.plot(hd.valid_time.values,tripoliDS.t2m, linestyle="--")
+plt.plot(hd.valid_time.values,tripoliHD.t2m, c="k")
+plt.plot(hd.valid_time.values, tripoliSIT, c="red", alpha=0.75)
+plt.legend(["IDW", "Downscaled", "Station"])
+plt.grid()
+plt.xticks(rotation=30)
+#plt.savefig("tripoli.png", dpi=1000)
+plt.show()
+'''
