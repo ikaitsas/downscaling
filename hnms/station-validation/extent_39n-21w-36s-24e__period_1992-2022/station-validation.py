@@ -10,6 +10,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import r2_score
+from sklearn.metrics import explained_variance_score
+
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
@@ -352,14 +357,26 @@ for time,value in zip(interp.valid_time.values,interp.values):
 degree_spacing = 0.1
 temporal_idx = temporal_idx
 
+t2m_pred = hd.t2mHD 
+t2m_res = hd.t2mHD + hd.resHD 
+t2mLD = ld.t2m 
+t2mLD_pred = ld.t2m_predLD
+times = hd.valid_time.values
+
+mins = [
+    np.nanmin(t2mLD_pred.values[temporal_idx,:,:]),
+    np.nanmin(t2mLD.values[temporal_idx,:,:]),
+    np.nanmin(t2m_pred.values[temporal_idx,:,:]),
+    np.nanmin(t2m_res.values[temporal_idx,:,:])
+    ]
+maxes = [
+    np.nanmax(t2mLD_pred.values[temporal_idx,:,:]),
+    np.nanmax(t2mLD.values[temporal_idx,:,:]),
+    np.nanmax(t2m_pred.values[temporal_idx,:,:]),
+    np.nanmax(t2m_res.values[temporal_idx,:,:])
+    ]
+
 if visualize == True:
-    
-    t2m_pred = hd.t2mHD 
-    t2m_res = hd.t2mHD + hd.resHD 
-    t2mLD = ld.t2m 
-    t2mLD_pred = ld.t2m_predLD
-    times = hd.valid_time.values
-    
     print('Mapping...')
 
     # order: t2mLD, t2mLD_pred, t2m_pred, t2m_res
@@ -380,18 +397,7 @@ if visualize == True:
          )
         ]
     
-    mins = [
-        np.nanmin(t2mLD_pred.values[temporal_idx,:,:]),
-        np.nanmin(t2mLD.values[temporal_idx,:,:]),
-        np.nanmin(t2m_pred.values[temporal_idx,:,:]),
-        np.nanmin(t2m_res.values[temporal_idx,:,:])
-        ]
-    maxes = [
-        np.nanmax(t2mLD_pred.values[temporal_idx,:,:]),
-        np.nanmax(t2mLD.values[temporal_idx,:,:]),
-        np.nanmax(t2m_pred.values[temporal_idx,:,:]),
-        np.nanmax(t2m_res.values[temporal_idx,:,:])
-        ]
+    
     
     fig, axes = plt.subplots(
         2, 2, 
@@ -442,6 +448,18 @@ if visualize == True:
 
 
 #%% paidikh xara
+dfLD = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
+dfHD = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
+dfSITE = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
+
+'''
+Pithanotata na yparxei kai grhgoroteros tropos
+Alla autos douleuei sigoura kala
+Prosoxh sta indexes, exei mismatch logw multiindex
+sta dataarray derived products
+me kamia lambda function mhpws??
+'''
+print("Performing IDW interpolation on LD & HD Data...")
 for i in range(len(stations)):
     station = stations.iloc[i]
     
@@ -449,6 +467,8 @@ for i in range(len(stations)):
     station_name = station.iloc[2]
     
     station_location = ( station.iloc[3], station.iloc[4] )
+    
+    print(f"Station: {station_name} ({station_code})")
     
     seriesLD = idw_interpolation_across_time(
         target=station_location, dataarray=dataarrayLD
@@ -462,17 +482,67 @@ for i in range(len(stations)):
         insitu.index.isin(hd.valid_time.values), str(station_code)
         ]
     
+    if visualize == True:
+        plt.plot(hd.valid_time.values, seriesLD, linestyle="--")
+        plt.plot(hd.valid_time.values, seriesSITE, c="r", alpha=0.75)
+        plt.plot(hd.valid_time.values, seriesHD, c="k")
+        plt.title(f'2m Temperature - {station_name}')
+        plt.legend(["IDW", "In-situ", "Downscaled"], prop={'size': 7}, framealpha=0.3)
+        plt.xticks(rotation=30)
+        plt.ylabel("Temperature  [°C]")
+        plt.grid()
+        #plt.savefig(f'timeseries-{station_name}.png', dpi=300)
+        plt.show()
     
-    plt.plot(hd.valid_time.values, seriesLD, linestyle="--")
-    plt.plot(hd.valid_time.values, seriesSITE, c="r", alpha=0.75)
-    plt.plot(hd.valid_time.values, seriesHD, c="k")
-    plt.title(f'2m Temperature - {station_name}')
-    plt.legend(["IDW", "In-situ", "Downscaled"], prop={'size': 7}, framealpha=0.3)
-    plt.xticks(rotation=30)
+    dfLD.loc[:,str(station_code)] = seriesLD.values
+    dfHD.loc[:,str(station_code)] = seriesHD.values
+
+
+#%% Performance metrics
+# These below get stacked "horizontally"
+# if future_stack=True specified, dont specify dropna=False
+dfLD_stacked = dfLD.stack(future_stack=True)
+dfHD_stacked = dfHD.stack(future_stack=True)
+dfSITE_stacked = dfSITE.stack(future_stack=True)
+
+
+if visualize == True:
+    x= np.linspace(3, 32, 100)
     plt.grid()
-    plt.savefig(f'timeseries-{station_name}.png', dpi=300)
+    plt.scatter(dfLD_stacked, dfSITE_stacked, s=3)
+    plt.scatter(dfHD_stacked, dfSITE_stacked, s=3, alpha=0.65)
+    plt.xlabel("Modeled Temperature  [°C]")
+    plt.ylabel("Insitu Temperature  [°C]")
+    plt.legend(["IDW", "Downscaled"])
+    plt.plot(x, x, c="k" ,alpha=0.35)
+    plt.title("Temperature Scatter Plot")
+    plt.axis("square")
+    #plt.savefig("scatter-plot-monthly.png", dpi=1000)
     plt.show()
 
 
+mask = ~np.isnan(dfSITE_stacked) & ~np.isnan(dfLD_stacked)
+mseLD = mean_squared_error(dfSITE_stacked[mask], dfLD_stacked[mask])
+mseHD = mean_squared_error(dfSITE_stacked[mask], dfHD_stacked[mask])
+maeLD = mean_absolute_error(dfSITE_stacked[mask], dfLD_stacked[mask])
+maeHD = mean_absolute_error(dfSITE_stacked[mask], dfHD_stacked[mask])
+r2LD = r2_score(dfSITE_stacked[mask], dfLD_stacked[mask])
+r2HD = r2_score(dfSITE_stacked[mask], dfHD_stacked[mask])
 
+mapeLD = np.mean(
+    np.abs(
+        (dfSITE_stacked[mask] - dfLD_stacked[mask]) / dfSITE_stacked[mask]
+        )
+    ) * 100
+mapeHD = np.mean(
+    np.abs(
+        (dfSITE_stacked[mask] - dfHD_stacked[mask]) / dfSITE_stacked[mask]
+        )
+    ) * 100
+
+mbeLD = np.mean(dfSITE_stacked[mask] - dfLD_stacked[mask])
+mbeHD = np.mean(dfSITE_stacked[mask] - dfHD_stacked[mask])
+
+evsLD = explained_variance_score(dfSITE_stacked[mask], dfLD_stacked[mask])
+evsHD = explained_variance_score(dfSITE_stacked[mask], dfHD_stacked[mask])
 
