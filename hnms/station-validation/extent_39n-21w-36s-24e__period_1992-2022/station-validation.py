@@ -28,7 +28,7 @@ ld = xr.open_dataset("outputs_low_resolution_model.nc")
 hd = xr.open_dataset("outputs_high_resolution_model.nc")
 
 
-visualize = True
+visualize = False
 temporal_idx = 11
 target = (38.88,21.17)
 resolution=0.1
@@ -36,7 +36,7 @@ dataarrayLD = ld.t2m
 dataarrayHD = hd.t2mHD + hd.resHD
 
 
-
+#%% functions
 def find_bounding_box(target, dataarray):
     """
     The returned list of bounding points is shown clockwise
@@ -338,6 +338,52 @@ def idw_interpolation_across_time(target, dataarray, power=2):
     )
 
 
+def mean_absolute_percentage_error(y_true, y_pred):
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+
+def mean_bias_error(y_true, y_pred):
+    return np.mean(y_pred - y_true)
+
+def compute_metrics(group, mask):
+    #mask = group['downscaled'].notna()  # Ensure valid comparisons
+    #group = group.drop(columns=["month"], errors="ignore")
+    masked_group = group[mask.loc[group.index]]
+    
+    return pd.Series({
+        'mseLD': mean_squared_error(
+            masked_group['insitu'], masked_group['idw']
+            ),
+        'mseHD': mean_squared_error(
+            masked_group['insitu'], masked_group['downscaled']
+            ),
+        'maeLD': mean_absolute_error(
+            masked_group['insitu'], masked_group['idw']
+            ),
+        'maeHD': mean_absolute_error(
+            masked_group['insitu'], masked_group['downscaled']
+            ),
+        'mbeLD': mean_bias_error(
+            masked_group['insitu'], masked_group['idw']
+            ),
+        'mbeHD': mean_bias_error(
+            masked_group['insitu'], masked_group['downscaled']
+            ),
+        #'r2LD': r2_score(
+        #    group.loc[mask, 'insitu'], group.loc[mask, 'idw']
+        #    ),
+        #'r2HD': r2_score(
+        #    group.loc[mask, 'insitu'], group.loc[mask, 'downscaled']
+        #    )
+        'mapeLD': mean_absolute_percentage_error(
+            masked_group['insitu'], masked_group['idw']
+            ),
+        'mapeHD': mean_absolute_percentage_error(
+            masked_group['insitu'], masked_group['downscaled']
+            ),
+    })
+
+
 #%% play
 temp_target = idw_interpolation(
         target=target, dataarray=ld.t2m, 
@@ -486,12 +532,12 @@ for i in range(len(stations)):
         plt.plot(hd.valid_time.values, seriesLD, linestyle="--")
         plt.plot(hd.valid_time.values, seriesSITE, c="r", alpha=0.75)
         plt.plot(hd.valid_time.values, seriesHD, c="k")
-        plt.title(f'2m Temperature - {station_name}')
+        plt.title(f'2m Temperature - {station_name} ({station_code})')
         plt.legend(["IDW", "In-situ", "Downscaled"], prop={'size': 7}, framealpha=0.3)
         plt.xticks(rotation=30)
         plt.ylabel("Temperature  [°C]")
         plt.grid()
-        #plt.savefig(f'timeseries-{station_name}.png', dpi=300)
+        #plt.savefig(f'timeseries-{station_code}-{station_name}.png', dpi=300)
         plt.show()
     
     dfLD.loc[:,str(station_code)] = seriesLD.values
@@ -509,7 +555,7 @@ dfSITE_stacked = dfSITE.stack(future_stack=True)
 if visualize == True:
     x= np.linspace(3, 32, 100)
     plt.grid()
-    plt.scatter(dfLD_stacked, dfSITE_stacked, s=3)
+    plt.scatter(dfLD_stacked, dfSITE_stacked, s=3, alpha=0.85)
     plt.scatter(dfHD_stacked, dfSITE_stacked, s=3, alpha=0.65)
     plt.xlabel("Modeled Temperature  [°C]")
     plt.ylabel("Insitu Temperature  [°C]")
@@ -521,28 +567,133 @@ if visualize == True:
     plt.show()
 
 
+df_stacked = pd.concat([dfLD_stacked, dfHD_stacked, dfSITE_stacked], axis=1)
+df_stacked.columns = ["idw", "downscaled", "insitu"]
+df_stacked['month'] = df_stacked.index.get_level_values(0).month
+df_stacked['station_code'] = df_stacked.index.get_level_values(1).astype(int)
+
 mask = ~np.isnan(dfSITE_stacked) & ~np.isnan(dfLD_stacked)
-mseLD = mean_squared_error(dfSITE_stacked[mask], dfLD_stacked[mask])
-mseHD = mean_squared_error(dfSITE_stacked[mask], dfHD_stacked[mask])
-maeLD = mean_absolute_error(dfSITE_stacked[mask], dfLD_stacked[mask])
-maeHD = mean_absolute_error(dfSITE_stacked[mask], dfHD_stacked[mask])
-r2LD = r2_score(dfSITE_stacked[mask], dfLD_stacked[mask])
-r2HD = r2_score(dfSITE_stacked[mask], dfHD_stacked[mask])
+df_stacked_mask = df_stacked.loc[mask,:]
 
-mapeLD = np.mean(
-    np.abs(
-        (dfSITE_stacked[mask] - dfLD_stacked[mask]) / dfSITE_stacked[mask]
+
+mseLD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.idw)
+mseHD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
+maeLD = mean_absolute_error(df_stacked_mask.insitu, df_stacked_mask.idw)
+maeHD = mean_absolute_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
+r2LD = r2_score(df_stacked_mask.insitu, df_stacked_mask.idw)
+r2HD = r2_score(df_stacked_mask.insitu, df_stacked_mask.downscaled)
+
+mapeLD = mean_absolute_percentage_error(
+    df_stacked_mask.insitu, df_stacked_mask.idw
+    )
+mapeHD = mean_absolute_percentage_error(
+    df_stacked_mask.insitu, dfHD_stacked[mask]
+    )
+
+mbeLD = np.mean(df_stacked_mask.idw - df_stacked_mask.insitu)
+mbeHD = np.mean(df_stacked_mask.downscaled - df_stacked_mask.insitu)
+'''
+evsLD = explained_variance_score(
+    df_stacked_mask.insitu, df_stacked_mask.idw
+    )
+evsHD = explained_variance_score(
+df_stacked_mask.insitu, df_stacked_mask.downscaled
+)
+'''
+
+monthly_metrics = df_stacked[mask].groupby(['month'])[
+    ["idw","downscaled","insitu"]
+    ].apply(
+    lambda group: compute_metrics(group, mask)
+    )
+monthly_metrics["idw_variance"] = df_stacked[mask].groupby("month")[["idw"]].var()
+monthly_metrics["downscaled_variance"] = df_stacked[mask].groupby("month")[["downscaled"]].var()
+monthly_metrics["insitu_variance"] = df_stacked[mask].groupby("month")[["insitu"]].var()
+
+
+station_metrics = df_stacked[mask].groupby(['station_code'])[
+    ["idw","downscaled","insitu"]
+    ].apply(
+    lambda group: compute_metrics(group, mask)
+    )
+monthly_metrics["idw_variance"] = df_stacked[mask].groupby("month")[["idw"]].var()
+monthly_metrics["downscaled_variance"] = df_stacked[mask].groupby("month")[["downscaled"]].var()
+monthly_metrics["insitu_variance"] = df_stacked[mask].groupby("month")[["insitu"]].var()
+
+
+
+
+
+
+
+
+
+
+
+
+'''
+correlation = df_stacked[["insitu", "idw", "downscaled"]].corr()
+correlation_each_month = df_stacked.groupby("month")[["insitu", "idw", "downscaled"]].corr()
+correlation_per_station = df_stacked.groupby("station_code")[["insitu", "idw", "downscaled"]].corr()
+
+df_stacked["residuals_idw"] = df_stacked["insitu"] - df_stacked["idw"]
+df_stacked["residuals_downscaled"] = df_stacked["insitu"] - df_stacked["downscaled"]
+
+residuals_variance = df_stacked.groupby("month")[["residuals_idw", "residuals_downscaled"]].var()
+residuals_variance["insitu"] = df_stacked.groupby("month")[["insitu"]].var()
+'''
+
+'''
+mseLD_months, mseHD_months = [], []
+maeLD_months, maeHD_months = [], []
+# Per month r2 producing VERY STRANGE values
+# This might have to do with variance reduction at monthly scales??
+# WHole year: var = 51.20 for insitu
+# Per month: 1.48 < var <4.27 for insitu
+# Maybe will ad seasonal aggregation, there r2 might not be dogshit
+for month in range(1,13):
+    per_month = df_stacked[df_stacked.month==month]
+    
+    mseLD_ = mean_squared_error(
+        per_month.insitu[mask], per_month.idw[mask]
         )
-    ) * 100
-mapeHD = np.mean(
-    np.abs(
-        (dfSITE_stacked[mask] - dfHD_stacked[mask]) / dfSITE_stacked[mask]
+    mseHD_ = mean_squared_error(
+        per_month.insitu[mask], per_month.downscaled[mask]
         )
-    ) * 100
+    mseLD_months.append(mseLD_)
+    mseHD_months.append(mseHD_)
+    
+    maeLD_ = mean_absolute_error(
+        per_month.insitu[mask], per_month.idw[mask]
+        )
+    maeHD_ = mean_absolute_error(
+        per_month.insitu[mask], per_month.downscaled[mask]
+        )
+    maeLD_months.append(maeLD_)
+    maeHD_months.append(maeHD_)
+'''
 
-mbeLD = np.mean(dfSITE_stacked[mask] - dfLD_stacked[mask])
-mbeHD = np.mean(dfSITE_stacked[mask] - dfHD_stacked[mask])
-
-evsLD = explained_variance_score(dfSITE_stacked[mask], dfLD_stacked[mask])
-evsHD = explained_variance_score(dfSITE_stacked[mask], dfHD_stacked[mask])
-
+'''
+mseLD_stations, mseHD_stations = [], []
+maeLD_stations, maeHD_stations = [], []
+for station_code in np.unique(df_stacked[mask].index.get_level_values(1).astype(int)):
+    per_station = df_stacked[df_stacked.station_code==station_code]
+    
+    mseLD_ = mean_squared_error(
+        per_station.insitu[mask], per_station.idw[mask]
+        )
+    mseHD_ = mean_squared_error(
+        per_station.insitu[mask], per_station.downscaled[mask]
+        )
+    mseLD_stations.append(mseLD_)
+    mseHD_stations.append(mseHD_)
+    
+    maeLD_ = mean_absolute_error(
+        per_station.insitu[mask], per_station.idw[mask]
+        )
+    maeHD_ = mean_absolute_error(
+        per_station.insitu[mask], per_station.downscaled[mask]
+        )
+    maeLD_stations.append(maeLD_)
+    maeHD_stations.append(maeHD_)
+    '''
