@@ -545,7 +545,7 @@ for i in range(len(stations)):
 
 
 #%% Performance metrics
-# These below get stacked "horizontally"
+# These below get stacked "horizontally" (per station first)
 # if future_stack=True specified, dont specify dropna=False
 dfLD_stacked = dfLD.stack(future_stack=True)
 dfHD_stacked = dfHD.stack(future_stack=True)
@@ -555,12 +555,12 @@ dfSITE_stacked = dfSITE.stack(future_stack=True)
 if visualize == True:
     x= np.linspace(3, 32, 100)
     plt.grid()
-    plt.scatter(dfLD_stacked, dfSITE_stacked, s=3, alpha=0.85)
-    plt.scatter(dfHD_stacked, dfSITE_stacked, s=3, alpha=0.65)
-    plt.xlabel("Modeled Temperature  [°C]")
-    plt.ylabel("Insitu Temperature  [°C]")
+    plt.scatter(dfSITE_stacked, dfLD_stacked, s=3, alpha=0.95)
+    plt.scatter(dfSITE_stacked, dfHD_stacked, s=3, alpha=0.75)
+    plt.ylabel("Modeled Temperature  [°C]")
+    plt.xlabel("Insitu Temperature  [°C]")
     plt.legend(["IDW", "Downscaled"])
-    plt.plot(x, x, c="k" ,alpha=0.35)
+    plt.plot(x, x, c="k", linestyle="--", alpha=0.75)
     plt.title("Temperature Scatter Plot")
     plt.axis("square")
     #plt.savefig("scatter-plot-monthly.png", dpi=1000)
