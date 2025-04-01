@@ -30,8 +30,7 @@ hd = xr.open_dataset("outputs_high_resolution_model.nc")
 
 visualize = False
 temporal_idx = 11
-target = (38.88,21.17)
-resolution=0.1
+target = (37.4067,22.7192)
 dataarrayLD = ld.t2m
 dataarrayHD = hd.t2mHD + hd.resHD
 
@@ -43,12 +42,6 @@ def find_bounding_box(target, dataarray):
     if the target is right on top of a grid point, return target only
     if it is latitude/longitude aligned, return a bounding box of 6 points
     if it not aligned, return a 4 point square bounding box
-    
-    ADD EDGE HANDLING, WHERE THE TARGET LIES INSIDE THE EDGE GRID
-    IN THIS CASE RETURN A SIZE-2 LIST IF ONLY LAT/LON IS ON EDGE
-    IF BOTH ARE ON EDGE, A SIZE-1 LIST
-    MAYBE WILL HANDLE THOSE INSIDE THE ALIGNMENT CASES?
-    OR BY KEEPING THE UNIQUE ELEMENTS OF THE LIST?
     """
     target_lat, target_lon = target
     
@@ -341,13 +334,23 @@ def idw_interpolation_across_time(target, dataarray, power=2):
 def mean_absolute_percentage_error(y_true, y_pred):
     return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
-
 def mean_bias_error(y_true, y_pred):
     return np.mean(y_pred - y_true)
+
+def unbiased_root_mean_squared_error(y_true, y_pred):
+    mbe = mean_bias_error(y_true, y_pred)
+    ubmse = np.mean( (y_true - y_pred - mbe)**2 )
+    return np.sqrt( ubmse )
+
+def unbiased_root_mean_squared_error2(y_true, y_pred):
+    mbe = mean_bias_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    return np.sqrt( mse**2 - mbe**2 )
 
 def compute_metrics(group, mask):
     #mask = group['downscaled'].notna()  # Ensure valid comparisons
     #group = group.drop(columns=["month"], errors="ignore")
+    #SHOULD PROBABLY REMOVE MASK PARAMETER
     masked_group = group[mask.loc[group.index]]
     
     return pd.Series({
@@ -375,6 +378,12 @@ def compute_metrics(group, mask):
         #'r2HD': r2_score(
         #    group.loc[mask, 'insitu'], group.loc[mask, 'downscaled']
         #    )
+        'ubrmseLD': unbiased_root_mean_squared_error(
+            masked_group['insitu'], masked_group['idw']
+            ),
+        'ubrmseHD': unbiased_root_mean_squared_error(
+            masked_group['insitu'], masked_group['downscaled']
+            ),
         'mapeLD': mean_absolute_percentage_error(
             masked_group['insitu'], masked_group['idw']
             ),
@@ -384,7 +393,7 @@ def compute_metrics(group, mask):
     })
 
 
-#%% play
+#%% dokimastiko
 temp_target = idw_interpolation(
         target=target, dataarray=ld.t2m, 
         timestamp=temporal_idx,
@@ -396,7 +405,7 @@ interp = idw_interpolation_across_time(
         target=target, dataarray=ld.t2m ,power=2
         )
 for time,value in zip(interp.valid_time.values,interp.values):
-    print(time,value)
+    print(time,np.round(value[0][0],2))
 
 
 #%% optikopoihsh
@@ -444,7 +453,6 @@ if visualize == True:
         ]
     
     
-    
     fig, axes = plt.subplots(
         2, 2, 
         figsize=(12, 12), 
@@ -478,7 +486,7 @@ if visualize == True:
         
         ax.scatter(
             stations.lon, stations.lat, 
-            c="k", marker="+", s=10,
+            c="darkslategrey", marker="+", s=12,
             linewidth=0.8, alpha=0.75,
             zorder=10
             )
@@ -491,6 +499,44 @@ if visualize == True:
     #plt.tight_layout()  
     #plt.savefig("multiplot.png", dpi=1000, bbox_inches="tight")
     plt.show() 
+    
+    '''
+    fig, ax = plt.subplots(
+        figsize=(7, 7), subplot_kw={"projection": ccrs.PlateCarree()}
+        )
+    
+    img = hd.dem.plot.pcolormesh(
+        ax=ax, cmap='inferno_r', transform=ccrs.PlateCarree(),
+        vmin=0, vmax=hd.dem.values.max(), add_colorbar=False
+        )
+
+    ax.coastlines()
+    ax.set_title("Elevation - 1km Resolution")
+    
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.5, linestyle="--", color="gray"
+        )
+    gl.xlocator = MultipleLocator(0.1)
+    gl.ylocator = MultipleLocator(0.1)
+    gl.top_labels = False
+    gl.right_labels = False
+    
+    ax.scatter(
+        stations.lon, stations.lat, 
+        c="g", marker="+", s=10,
+        linewidth=0.8, alpha=0.75,
+        zorder=10
+        )
+
+    #fig.subplots_adjust(right=0.9)
+    cbar_ax = fig.add_axes([0.92, 0.11, 0.04, 0.78])
+    cbar = fig.colorbar(img, cax=cbar_ax)
+    cbar.set_label("Elevation [m]")
+        
+    #plt.tight_layout()  
+    #plt.savefig("elevation.png", dpi=1000, bbox_inches="tight")
+    plt.show() 
+    '''
 
 
 #%% paidikh xara
@@ -583,6 +629,16 @@ maeHD = mean_absolute_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
 r2LD = r2_score(df_stacked_mask.insitu, df_stacked_mask.idw)
 r2HD = r2_score(df_stacked_mask.insitu, df_stacked_mask.downscaled)
 
+ubrmseLD = unbiased_root_mean_squared_error(
+    df_stacked_mask.insitu, df_stacked_mask.idw)
+ubrmseHD = unbiased_root_mean_squared_error(
+    df_stacked_mask.insitu, df_stacked_mask.downscaled)
+
+ubrmseLD2 = unbiased_root_mean_squared_error2(
+    df_stacked_mask.insitu, df_stacked_mask.idw)
+ubrmseHD2 = unbiased_root_mean_squared_error2(
+    df_stacked_mask.insitu, df_stacked_mask.downscaled)
+
 mapeLD = mean_absolute_percentage_error(
     df_stacked_mask.insitu, df_stacked_mask.idw
     )
@@ -592,33 +648,34 @@ mapeHD = mean_absolute_percentage_error(
 
 mbeLD = np.mean(df_stacked_mask.idw - df_stacked_mask.insitu)
 mbeHD = np.mean(df_stacked_mask.downscaled - df_stacked_mask.insitu)
-'''
-evsLD = explained_variance_score(
-    df_stacked_mask.insitu, df_stacked_mask.idw
-    )
-evsHD = explained_variance_score(
-df_stacked_mask.insitu, df_stacked_mask.downscaled
-)
-'''
 
-monthly_metrics = df_stacked[mask].groupby(['month'])[
+
+month_group_key = "month"
+monthly_metrics = df_stacked[mask].groupby([month_group_key])[
     ["idw","downscaled","insitu"]
     ].apply(
     lambda group: compute_metrics(group, mask)
     )
-monthly_metrics["idw_variance"] = df_stacked[mask].groupby("month")[["idw"]].var()
-monthly_metrics["downscaled_variance"] = df_stacked[mask].groupby("month")[["downscaled"]].var()
-monthly_metrics["insitu_variance"] = df_stacked[mask].groupby("month")[["insitu"]].var()
+monthly_metrics["idw_variance"] = df_stacked[mask].groupby(
+    month_group_key)[["idw"]].var()
+monthly_metrics["downscaled_variance"] = df_stacked[mask].groupby(
+    month_group_key)[["downscaled"]].var()
+monthly_metrics["insitu_variance"] = df_stacked[mask].groupby(
+    month_group_key)[["insitu"]].var()
 
 
-station_metrics = df_stacked[mask].groupby(['station_code'])[
+station_group_key = "station_code"
+station_metrics = df_stacked[mask].groupby([station_group_key])[
     ["idw","downscaled","insitu"]
     ].apply(
     lambda group: compute_metrics(group, mask)
     )
-monthly_metrics["idw_variance"] = df_stacked[mask].groupby("month")[["idw"]].var()
-monthly_metrics["downscaled_variance"] = df_stacked[mask].groupby("month")[["downscaled"]].var()
-monthly_metrics["insitu_variance"] = df_stacked[mask].groupby("month")[["insitu"]].var()
+station_metrics["idw_variance"] = df_stacked[mask].groupby(
+    station_group_key)[["idw"]].var()
+station_metrics["downscaled_variance"] = df_stacked[mask].groupby(
+    station_group_key)[["downscaled"]].var()
+station_metrics["insitu_variance"] = df_stacked[mask].groupby(
+    station_group_key)[["insitu"]].var()
 
 
 
@@ -626,11 +683,7 @@ monthly_metrics["insitu_variance"] = df_stacked[mask].groupby("month")[["insitu"
 
 
 
-
-
-
-
-
+#%% koments
 '''
 correlation = df_stacked[["insitu", "idw", "downscaled"]].corr()
 correlation_each_month = df_stacked.groupby("month")[["insitu", "idw", "downscaled"]].corr()
