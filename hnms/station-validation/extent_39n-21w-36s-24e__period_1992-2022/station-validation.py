@@ -331,6 +331,10 @@ def idw_interpolation_across_time(target, dataarray, power=2):
     )
 
 
+def root_mean_squared_error(y_true, y_pred):
+    mse = mean_squared_error(y_true, y_pred)
+    return np.sqrt(mse)
+
 def mean_absolute_percentage_error(y_true, y_pred):
     return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
@@ -339,13 +343,13 @@ def mean_bias_error(y_true, y_pred):
 
 def unbiased_root_mean_squared_error(y_true, y_pred):
     mbe = mean_bias_error(y_true, y_pred)
-    ubmse = np.mean( (y_true - y_pred - mbe)**2 )
+    ubmse = np.mean( (y_pred - y_true - mbe)**2 )
     return np.sqrt( ubmse )
 
 def unbiased_root_mean_squared_error2(y_true, y_pred):
     mbe = mean_bias_error(y_true, y_pred)
-    mse = mean_squared_error(y_true, y_pred)
-    return np.sqrt( mse**2 - mbe**2 )
+    rmse = root_mean_squared_error(y_true, y_pred)
+    return np.sqrt( rmse**2 - mbe**2 )
 
 def compute_metrics(group, mask):
     #mask = group['downscaled'].notna()  # Ensure valid comparisons
@@ -499,44 +503,6 @@ if visualize == True:
     #plt.tight_layout()  
     #plt.savefig("multiplot.png", dpi=1000, bbox_inches="tight")
     plt.show() 
-    
-    '''
-    fig, ax = plt.subplots(
-        figsize=(7, 7), subplot_kw={"projection": ccrs.PlateCarree()}
-        )
-    
-    img = hd.dem.plot.pcolormesh(
-        ax=ax, cmap='inferno_r', transform=ccrs.PlateCarree(),
-        vmin=0, vmax=hd.dem.values.max(), add_colorbar=False
-        )
-
-    ax.coastlines()
-    ax.set_title("Elevation - 1km Resolution")
-    
-    gl = ax.gridlines(
-        draw_labels=True, linewidth=0.5, linestyle="--", color="gray"
-        )
-    gl.xlocator = MultipleLocator(0.1)
-    gl.ylocator = MultipleLocator(0.1)
-    gl.top_labels = False
-    gl.right_labels = False
-    
-    ax.scatter(
-        stations.lon, stations.lat, 
-        c="g", marker="+", s=10,
-        linewidth=0.8, alpha=0.75,
-        zorder=10
-        )
-
-    #fig.subplots_adjust(right=0.9)
-    cbar_ax = fig.add_axes([0.92, 0.11, 0.04, 0.78])
-    cbar = fig.colorbar(img, cax=cbar_ax)
-    cbar.set_label("Elevation [m]")
-        
-    #plt.tight_layout()  
-    #plt.savefig("elevation.png", dpi=1000, bbox_inches="tight")
-    plt.show() 
-    '''
 
 
 #%% paidikh xara
@@ -678,9 +644,57 @@ station_metrics["insitu_variance"] = df_stacked[mask].groupby(
     station_group_key)[["insitu"]].var()
 
 
-
-
-
+#%% Metrics Visualization
+if visualize == True:
+    for metric in ["mse", "mae", "mbe", "ubrmse"]:
+        print(metric+"LD", metric+"HD")
+        # Merge the 2 plots in a subplot...
+        # stations.name[stations.WMO_code.isin(station_metrics.index)]
+        
+        plt.plot(range(len(station_metrics)), station_metrics[metric+"LD"])
+        plt.plot(range(len(station_metrics)), station_metrics[metric+"HD"])
+        plt.xticks(
+            range(len(station_metrics)), station_metrics.index,
+            rotation=35
+            )
+        plt.grid()
+        plt.title(f"{metric.upper()} - Per Station")
+        plt.legend(["IDW", "Downscaled"])
+        plt.xlabel("Station Code")
+        
+        if metric == "mse":
+            ylabel = "Error [°C²]"
+        else:
+            ylabel = "Error [°C]"
+        plt.ylabel(ylabel)
+        
+        if metric == "mbe":
+            plt.ylim(top=0)
+        
+        plt.show()
+        
+        
+        plt.plot(range(len(monthly_metrics)), monthly_metrics[metric+"LD"])
+        plt.plot(range(len(monthly_metrics)), monthly_metrics[metric+"HD"])
+        plt.xticks(
+            range(len(monthly_metrics)), monthly_metrics.index,
+            rotation=35
+            )
+        plt.grid()
+        plt.title(f"{metric.upper()} - Per Month")
+        plt.legend(["IDW", "Downscaled"])
+        plt.xlabel("Month")
+        
+        if metric == "mse":
+            ylabel = "Error [°C²]"
+        else:
+            ylabel = "Error [°C]"
+        plt.ylabel(ylabel)
+        
+        if metric == "mbe":
+            plt.ylim(top=0)
+        
+        plt.show()
 
 
 #%% koments
@@ -749,4 +763,42 @@ for station_code in np.unique(df_stacked[mask].index.get_level_values(1).astype(
         )
     maeLD_stations.append(maeLD_)
     maeHD_stations.append(maeHD_)
-    '''
+'''
+    
+'''
+fig, ax = plt.subplots(
+    figsize=(7, 7), subplot_kw={"projection": ccrs.PlateCarree()}
+    )
+
+img = hd.dem.plot.pcolormesh(
+    ax=ax, cmap='inferno_r', transform=ccrs.PlateCarree(),
+    vmin=0, vmax=hd.dem.values.max(), add_colorbar=False
+    )
+
+ax.coastlines()
+ax.set_title("Elevation - 1km Resolution")
+
+gl = ax.gridlines(
+    draw_labels=True, linewidth=0.5, linestyle="--", color="gray"
+    )
+gl.xlocator = MultipleLocator(0.1)
+gl.ylocator = MultipleLocator(0.1)
+gl.top_labels = False
+gl.right_labels = False
+
+ax.scatter(
+    stations.lon, stations.lat, 
+    c="g", marker="+", s=10,
+    linewidth=0.8, alpha=0.75,
+    zorder=10
+    )
+
+#fig.subplots_adjust(right=0.9)
+cbar_ax = fig.add_axes([0.92, 0.11, 0.04, 0.78])
+cbar = fig.colorbar(img, cax=cbar_ax)
+cbar.set_label("Elevation [m]")
+    
+#plt.tight_layout()  
+#plt.savefig("elevation.png", dpi=1000, bbox_inches="tight")
+plt.show() 
+'''
