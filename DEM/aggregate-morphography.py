@@ -15,20 +15,22 @@ oute esy den tha ta thimasai se ligo
 """
 
 import os
+import rasterio
 import numpy as np
 import xarray as xr
-from osgeo import gdal
+#from osgeo import gdal
 from pathlib import Path
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
+from sklearn.impute import KNNImputer
 from skimage.measure import block_reduce
 
 
 target_res = 0.01  # in degrees
 input_dem = "output.tif"
-extent = [21, 39, 24, 36]  #W-N-E-S
+extent = [19.6, 41.8, 28.3, 34.8]  #W-N-E-S
 export_nc_to_device = True
 
 
@@ -48,16 +50,20 @@ for i,morphi in enumerate(morphography):
     tif_path = os.path.join(cwd, "outputs", "tif", tif_file)
     
     
-    gdal.UseExceptions()
+    #gdal.UseExceptions()
     
-    ds = gdal.Open(tif_path)
+    #ds = gdal.Open(tif_path)
+    with rasterio.open(tif_path) as ds:
+        array = ds.read(1)
     
-    array = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
+    array = array.astype("float32")
+    
+    #array = ds.read(1, dtype="float32")
     
     #introduce coarse corrections for slope and aspect too
     #like the 
     if morphi == "dem":
-        array[array<-100] = -100
+        array[array<-100] = np.nan
     if morphi == "slope":
         array[array<0] = 0
         

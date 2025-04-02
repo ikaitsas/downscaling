@@ -10,11 +10,17 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from scipy import stats
+from scipy.stats import linregress
+from scipy.special import kl_div
+import statsmodels.api as sm
+
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import r2_score
 from sklearn.metrics import explained_variance_score
 
+import seaborn as sns
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
@@ -28,7 +34,7 @@ ld = xr.open_dataset("outputs_low_resolution_model.nc")
 hd = xr.open_dataset("outputs_high_resolution_model.nc")
 
 
-visualize = False
+visualize = True
 temporal_idx = 11
 target = (37.4067,22.7192)
 dataarrayLD = ld.t2m
@@ -545,7 +551,12 @@ for i in range(len(stations)):
         plt.plot(hd.valid_time.values, seriesSITE, c="r", alpha=0.75)
         plt.plot(hd.valid_time.values, seriesHD, c="k")
         plt.title(f'2m Temperature - {station_name} ({station_code})')
-        plt.legend(["IDW", "In-situ", "Downscaled"], prop={'size': 7}, framealpha=0.3)
+        
+        plt.legend(
+            ["ERA5-Land", "In-situ", "Downscaled"], prop={'size': 7}, 
+            framealpha=0.3
+            )
+        
         plt.xticks(rotation=30)
         plt.ylabel("Temperature  [°C]")
         plt.grid()
@@ -556,27 +567,13 @@ for i in range(len(stations)):
     dfHD.loc[:,str(station_code)] = seriesHD.values
 
 
-#%% Performance metrics
+
+#%% Fitting and statistical testing
 # These below get stacked "horizontally" (per station first)
 # if future_stack=True specified, dont specify dropna=False
 dfLD_stacked = dfLD.stack(future_stack=True)
 dfHD_stacked = dfHD.stack(future_stack=True)
 dfSITE_stacked = dfSITE.stack(future_stack=True)
-
-
-if visualize == True:
-    x= np.linspace(3, 32, 100)
-    plt.grid()
-    plt.scatter(dfSITE_stacked, dfLD_stacked, s=3, alpha=0.95)
-    plt.scatter(dfSITE_stacked, dfHD_stacked, s=3, alpha=0.75)
-    plt.ylabel("Modeled Temperature  [°C]")
-    plt.xlabel("Insitu Temperature  [°C]")
-    plt.legend(["IDW", "Downscaled"])
-    plt.plot(x, x, c="k", linestyle="--", alpha=0.75)
-    plt.title("Temperature Scatter Plot")
-    plt.axis("square")
-    #plt.savefig("scatter-plot-monthly.png", dpi=1000)
-    plt.show()
 
 
 df_stacked = pd.concat([dfLD_stacked, dfHD_stacked, dfSITE_stacked], axis=1)
@@ -588,6 +585,103 @@ mask = ~np.isnan(dfSITE_stacked) & ~np.isnan(dfLD_stacked)
 df_stacked_mask = df_stacked.loc[mask,:]
 
 
+slopeLD, interceptLD, r_valueLD, p_valueLD, std_errLD = linregress(
+    df_stacked_mask.insitu, df_stacked_mask.idw
+    )
+slopeHD, interceptHD, r_valueHD, p_valueHD, std_errHD = linregress(
+    df_stacked_mask.insitu, df_stacked_mask.downscaled
+    )
+
+
+# Doing it through statsmodels - same results as scipy.linregress
+YLD = df_stacked_mask.idw
+YHD = df_stacked_mask.downscaled
+X = df_stacked_mask.insitu
+X = sm.add_constant(X)
+
+modelLD = sm.OLS(YLD, X)
+modelHD = sm.OLS(YHD, X)
+
+resultsLD = modelLD.fit()
+resultsHD = modelHD.fit()
+
+print(resultsLD.params)
+print(resultsHD.params)
+
+
+errorERA5 = df_stacked_mask.idw - df_stacked_mask.insitu
+errorDownscaled = df_stacked_mask.downscaled - df_stacked_mask.insitu
+error_diff = errorDownscaled - errorERA5
+error = pd.concat([errorERA5, errorDownscaled, error_diff], axis=1)
+error.columns = ["ERA5-Land", "Downscaled", "Diff"]
+
+# A paired t-test is used below
+# If data not normally distributed, use a Wilcoxon signed-rank test
+t_stat, p_value = stats.ttest_1samp(error_diff, 0)
+
+
+if visualize == True:
+    # Histogram and Boxplot for Error Distribution visual inspection
+    plt.subplot(1, 2, 1)
+    sns.histplot(errorERA5, color='blue', kde=True, label='ERA5', bins=10, stat='density')
+    sns.histplot(errorDownscaled, color='green', kde=True, label='Downscaled', bins=10, stat='density')
+    sns.histplot(error_diff, color='brown', kde=True, label='Diff', bins=10, stat='density')
+    plt.title('Histogram of Errors')
+    plt.xlabel('Error (MAE)')
+    plt.ylabel('Density')
+    plt.grid()
+    plt.legend()
+    
+    # Boxplot of errors
+    plt.subplot(1, 2, 2)
+    sns.boxplot(data=error, palette=['blue', 'green', "brown"])
+    plt.title('Boxplot of Errors')
+    plt.xticks([0, 1, 2], ['ERA5', 'Downscaled', "Diff"])
+    plt.ylabel('Error (MAE)')
+    plt.grid()
+    
+    plt.tight_layout()
+    plt.show()
+    
+    
+    # Histogram for Temperature Distribution
+    sns.histplot(df_stacked_mask.idw, color='blue', kde=True, label='ERA5-Land', bins=10, stat='density')
+    sns.histplot(df_stacked_mask.downscaled, color='green', kde=True, label='Downscaled', bins=10, stat='density')
+    sns.histplot(df_stacked_mask.insitu, color='brown', kde=True, label='In-situ', bins=10, stat='density')
+    plt.title('Histogram of Temperatures')
+    plt.xlabel('Temperature  [°C]')
+    plt.ylabel('Density')
+    plt.grid()
+    plt.legend()
+    plt.show()
+    
+    
+    x= np.linspace(3, 32, 100)
+    yLD = slopeLD*x+interceptLD
+    yHD = slopeHD*x+interceptHD
+        
+    plt.grid()
+    plt.scatter(df_stacked_mask.insitu, df_stacked_mask.idw, s=3, alpha=0.95)
+    plt.plot(x, yLD, c="blue", linestyle="--", alpha=0.75)
+    plt.scatter(df_stacked_mask.insitu, df_stacked_mask.downscaled, s=3, alpha=0.75)
+    plt.plot(x, yHD, c="brown", linestyle="--", alpha=0.95)
+    plt.ylabel("Modeled Temperature  [°C]")
+    plt.xlabel("Insitu Temperature  [°C]")
+    plt.legend(
+        ["ERA5-Land", 
+         f'{slopeLD:.2f}T{interceptLD:.2f}',
+         "Downscaled", 
+         f'{slopeHD:.2f}T{interceptHD:.2f}'],
+        fontsize=8
+        )
+    plt.plot(x, x, c="k", linestyle="--", alpha=0.75)
+    plt.title("Temperature Scatter Plot")
+    plt.axis("square")
+    #plt.savefig("scatter-plot-monthly.png", dpi=1000)
+    plt.show()
+
+
+#%% Performance metrics
 mseLD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.idw)
 mseHD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
 maeLD = mean_absolute_error(df_stacked_mask.insitu, df_stacked_mask.idw)
@@ -616,18 +710,18 @@ mbeLD = np.mean(df_stacked_mask.idw - df_stacked_mask.insitu)
 mbeHD = np.mean(df_stacked_mask.downscaled - df_stacked_mask.insitu)
 
 
-month_group_key = "month"
-monthly_metrics = df_stacked[mask].groupby([month_group_key])[
+temporal_group_key = "month"
+temporal_metrics = df_stacked[mask].groupby([temporal_group_key])[
     ["idw","downscaled","insitu"]
     ].apply(
     lambda group: compute_metrics(group, mask)
     )
-monthly_metrics["idw_variance"] = df_stacked[mask].groupby(
-    month_group_key)[["idw"]].var()
-monthly_metrics["downscaled_variance"] = df_stacked[mask].groupby(
-    month_group_key)[["downscaled"]].var()
-monthly_metrics["insitu_variance"] = df_stacked[mask].groupby(
-    month_group_key)[["insitu"]].var()
+temporal_metrics["idw_variance"] = df_stacked[mask].groupby(
+    temporal_group_key)[["idw"]].var()
+temporal_metrics["downscaled_variance"] = df_stacked[mask].groupby(
+    temporal_group_key)[["downscaled"]].var()
+temporal_metrics["insitu_variance"] = df_stacked[mask].groupby(
+    temporal_group_key)[["insitu"]].var()
 
 
 station_group_key = "station_code"
@@ -674,15 +768,15 @@ if visualize == True:
         plt.show()
         
         
-        plt.plot(range(len(monthly_metrics)), monthly_metrics[metric+"LD"])
-        plt.plot(range(len(monthly_metrics)), monthly_metrics[metric+"HD"])
+        plt.plot(range(len(temporal_metrics)), temporal_metrics[metric+"LD"])
+        plt.plot(range(len(temporal_metrics)), temporal_metrics[metric+"HD"])
         plt.xticks(
-            range(len(monthly_metrics)), monthly_metrics.index,
+            range(len(temporal_metrics)), temporal_metrics.index,
             rotation=35
             )
         plt.grid()
         plt.title(f"{metric.upper()} - Per Month")
-        plt.legend(["IDW", "Downscaled"])
+        plt.legend(["ERA5-Land", "Downscaled"])
         plt.xlabel("Month")
         
         if metric == "mse":
@@ -698,6 +792,15 @@ if visualize == True:
 
 
 #%% koments
+plt.plot(range(len(df_stacked_mask)), kl_div(df_stacked_mask.idw, df_stacked_mask.insitu))
+plt.plot(range(len(df_stacked_mask)), kl_div(df_stacked_mask.downscaled, df_stacked_mask.insitu))
+plt.legend(["ERA5-Land", "Downscaled"])
+plt.grid()
+plt.title("Kullback-Leibler Divergence")
+plt.show()
+
+
+
 '''
 correlation = df_stacked[["insitu", "idw", "downscaled"]].corr()
 correlation_each_month = df_stacked.groupby("month")[["insitu", "idw", "downscaled"]].corr()
@@ -710,60 +813,6 @@ residuals_variance = df_stacked.groupby("month")[["residuals_idw", "residuals_do
 residuals_variance["insitu"] = df_stacked.groupby("month")[["insitu"]].var()
 '''
 
-'''
-mseLD_months, mseHD_months = [], []
-maeLD_months, maeHD_months = [], []
-# Per month r2 producing VERY STRANGE values
-# This might have to do with variance reduction at monthly scales??
-# WHole year: var = 51.20 for insitu
-# Per month: 1.48 < var <4.27 for insitu
-# Maybe will ad seasonal aggregation, there r2 might not be dogshit
-for month in range(1,13):
-    per_month = df_stacked[df_stacked.month==month]
-    
-    mseLD_ = mean_squared_error(
-        per_month.insitu[mask], per_month.idw[mask]
-        )
-    mseHD_ = mean_squared_error(
-        per_month.insitu[mask], per_month.downscaled[mask]
-        )
-    mseLD_months.append(mseLD_)
-    mseHD_months.append(mseHD_)
-    
-    maeLD_ = mean_absolute_error(
-        per_month.insitu[mask], per_month.idw[mask]
-        )
-    maeHD_ = mean_absolute_error(
-        per_month.insitu[mask], per_month.downscaled[mask]
-        )
-    maeLD_months.append(maeLD_)
-    maeHD_months.append(maeHD_)
-'''
-
-'''
-mseLD_stations, mseHD_stations = [], []
-maeLD_stations, maeHD_stations = [], []
-for station_code in np.unique(df_stacked[mask].index.get_level_values(1).astype(int)):
-    per_station = df_stacked[df_stacked.station_code==station_code]
-    
-    mseLD_ = mean_squared_error(
-        per_station.insitu[mask], per_station.idw[mask]
-        )
-    mseHD_ = mean_squared_error(
-        per_station.insitu[mask], per_station.downscaled[mask]
-        )
-    mseLD_stations.append(mseLD_)
-    mseHD_stations.append(mseHD_)
-    
-    maeLD_ = mean_absolute_error(
-        per_station.insitu[mask], per_station.idw[mask]
-        )
-    maeHD_ = mean_absolute_error(
-        per_station.insitu[mask], per_station.downscaled[mask]
-        )
-    maeLD_stations.append(maeLD_)
-    maeHD_stations.append(maeHD_)
-'''
     
 '''
 fig, ax = plt.subplots(

@@ -32,12 +32,12 @@ from pathlib import Path
 
 nc_file_resolution = 0.1  #era5-land resolution
 input_dem = "output.tif"
-extent = [21, 39, 24, 36]  #W-N-E-S
+extent = [19.6, 41.8, 28.3, 34.8]  #W-N-E-S
 #set True if extent corresponds to center of grid cells
 reference_center = True
 #set True if you want to expand out to all directions
 #else it just shifts the DEM north and west, matching ERA5
-expand_to_all_directions = False
+expand_to_all_directions = True
 
 
 dem_file_name = input_dem[:-4]
@@ -89,8 +89,30 @@ for morphi in morphography:
                 ]
     else:
         subwindow = extent
-        
+         
+
+    cmd_crop = [
+        "gdal_translate", 
+        "-projwin",
+        f"{subwindow[0]}", 
+        f"{subwindow[1]}", 
+        f"{subwindow[2]}", 
+        f"{subwindow[3]}",
+        "-projwin_srs", 
+        "EPSG:4326",
+        srtm_path,
+        extent_path
+        ]
     
+    run_crop = subprocess.run(cmd_crop, 
+                            capture_output=True, 
+                            text=True)
+    print("gdalbuildvrt Standard Output:", run_crop.stdout)
+    print("gdalbuildvrt Standard Error:", run_crop.stderr)
+
+
+#%% Python GDAL methodology - somehow crashes on the lapapeio machine...
+'''
     try:
         gdal.UseExceptions()
         options = gdal.TranslateOptions(
@@ -112,44 +134,6 @@ gt = ds.GetGeoTransform()
 rows, cols = ds.RasterYSize, ds.RasterXSize
 
 ds = None
-        
-
-#%% Subprocess methodology - works the same as gdal python utilities
-'''
-    #better do it with gdal.Translate() & gdal.TranslateOptions()
-    #it will be mush clearer this way
-    if reference_center == True:
-        cmd_crop = [
-            "gdal_translate", 
-            "-projwin",
-            f"{extent[0]-nc_file_resolution/2}", 
-            f"{extent[1]+nc_file_resolution/2}", 
-            f"{extent[2]+nc_file_resolution/2}", 
-            f"{extent[3]-nc_file_resolution/2}",
-            "-projwin_srs", 
-            "EPSG:4326",
-            srtm_path,
-            extent_path
-            ]
-    else:  #for regular GDAL cropping
-        cmd_crop = [
-            "gdal_translate", 
-            "-projwin",
-            f"{extent[0]}", 
-            f"{extent[1]}", 
-            f"{extent[2]}", 
-            f"{extent[3]}",
-            "-projwin_srs", 
-            "EPSG:4326",
-            srtm_path,
-            extent_path
-            ]
-    
-    run_crop = subprocess.run(cmd_crop, 
-                            capture_output=True, 
-                            text=True)
-    print("gdalbuildvrt Standard Output:", run_crop.stdout)
-    print("gdalbuildvrt Standard Error:", run_crop.stderr)
 '''
 
 
