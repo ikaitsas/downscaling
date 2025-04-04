@@ -13,7 +13,7 @@ needs lots of adjustments for daily and hourly data...
 import os
 import cdsapi
 
-extent = [39, 21, 36, 24]
+extent = [41.8, 19.6, 35.8, 28.3]
 #single_year = 2021
 #multiple_requests = False
 years = list(range(1992,2023))

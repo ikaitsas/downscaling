@@ -16,18 +16,23 @@ print('Importing libraries and data...')
 import os
 import numpy as np
 import xarray as xr
+
+from dask.dataframe import from_pandas
+
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
 
 
-extent = [39, 21, 36, 24]
+extent = [41.8, 19.6, 35.8, 28.3]
 years = list(range(1992,2023))
 timescale = 'monthly'
-visualize = False
-save_to_device = False
+visualize = True
+save_to_device = True
 extract_nn_training_data = False
+
+downscaling_year_start = 2017
 
 
 # morphography files
@@ -56,7 +61,7 @@ file_path = os.path.join(folder, filename)
 #%% normal array from ERA5-Land
 ds = xr.open_dataset(file_path)
 
-ds = ds.drop_isel(latitude=-1, longitude=-1)
+#ds = ds.drop_isel(latitude=-1, longitude=-1)
 
 print('Merging with the ERA5-Land resolution Morphography...')
 ds.coords["dem"] = (["latitude", "longitude"], dem.dem.data)
@@ -117,17 +122,20 @@ if "valid_time" in df.columns:
     df = df.drop(columns=['valid_time'])
 
 df = df[column_to_keep]  #ensure t2m is always first column
-#df = df.reset_index(drop=True)
+df = df.reset_index(drop=True)
+
+ddf = from_pandas(df, int(ds.valid_month.values.shape[0]/2))
 
 
 #%% create downscalign HD array
+# need to make scaling_factor automatically, not manually assigned
 scaling_factor = 10  #divide resolution by this number
 
 print('Producing HD version...')
 print(f'Dividing each grid cell {scaling_factor}x{scaling_factor} times...')
 #axis=1 latitude, axis=2 longitude, change accordingly
 #will probably add index extraction from Dataset dimensions
-t2mHD_array = np.repeat(
+hd_t2m_array = np.repeat(
     np.repeat(t2m_array, scaling_factor, axis=1), scaling_factor, axis=2)
 
 
@@ -139,10 +147,11 @@ scaled_coords = {
 }
 
 # better to do this a dataset, for consistency...
-t2mHD = xr.DataArray(t2mHD_array,
+t2mHD = xr.DataArray(hd_t2m_array,
                      coords=scaled_coords,
                      dims=["valid_time", "latitude", "longitude"]
                      )
+hd_t2m_array = None
 
 t2mHD.coords["dem"] = (["latitude", "longitude"], demHD.dem.data)
 t2mHD.coords["dem"].attrs["units"] = "meters"
@@ -159,8 +168,34 @@ t2mHD.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 t2mHD.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
 t2mHD.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
+# Keep only part for downscaling - dont use this in training
+t2mHD = t2mHD.sel(
+    valid_time=t2mHD.valid_time[t2mHD.valid_year >= downscaling_year_start]
+    )
 
+
+#%% extract as arrays- might be applicable for large datasets
+# MAKE SURE THESE ARE PERFECTLY ALIGNED, LETS SAY C-STYLE (DEFAULT)
+time_levels = t2mHD.valid_time.shape[0]
+
+X_flat = t2mHD.values.reshape(time_levels,-1)
+
+hd_months = t2mHD.valid_month.values.astype(np.int8)
+hd_years = t2mHD.valid_year.values.astype(np.int16)
+
+hd_latitude = t2mHD.latitude.values.astype(np.float32)
+hd_longitude = t2mHD.longitude.values.astype(np.float32)
+hd_dem = np.tile(t2mHD.dem.values.flatten(), hd_months.shape).astype(np.int16)
+hd_slope = np.tile(t2mHD.slope.values.flatten(), hd_months.shape).astype(np.float32)
+hd_aspect = np.tile(t2mHD.aspect.values.flatten(), hd_months.shape).astype(np.int16)
+
+
+
+#%% convert to dataframe - not applicable for very large datasets
 print(f'Extracting {era5Land_resolution/scaling_factor}deg HD dataframe...')
+'''
+
+'''
 dfHD = t2mHD.to_dataframe(name='t2m')
 
 

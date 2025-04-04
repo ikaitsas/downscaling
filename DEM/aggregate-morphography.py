@@ -28,7 +28,7 @@ from sklearn.impute import KNNImputer
 from skimage.measure import block_reduce
 
 
-target_res = 0.1  # in degrees
+target_res = 0.01  # in degrees
 input_dem = "output.tif"
 extent = [19.6, 41.8, 28.3, 35.8]  #W-N-E-S
 export_nc_to_device = True
@@ -205,8 +205,8 @@ for morphi in morphography:
         )
     '''
     ax.set_title(title)
-    plt.savefig(f'outputs\\images\\{morphi}-{target_res}deg.png', 
-                dpi=1000, bbox_inches="tight")
+    #plt.savefig(f'outputs\\images\\{morphi}-{target_res}deg.png', 
+    #            dpi=1000, bbox_inches="tight")
     plt.show()
     
 
@@ -218,29 +218,6 @@ array_agg1 = block_reduce(array,
                           (block_size, block_size), 
                           np.mean).round()
 '''
-'''
-    if export_nc_to_device == True:
-        latitudes = np.linspace(y_max, y_max + y_res * rows, rows)
-        longitudes = np.linspace(x_min, x_min + x_res * cols, cols)
-        #produce another array for the aggregates, using different x_res,
-        #y_res. the mismatches were most likely because of the linspace
-        #numpy method, the correct one in this case is arange....
-        #efaga wres gia authn thn paparia.....
-        #np.arange also ensures correct spacing...
-        
-        latitudes_centered = latitudes + y_res/2
-        latitudes_centered = np.round(
-            latitudes_centered/target_resolution
-            )*target_resolution
-        longitudes_centered = longitudes + x_res/2
-        longitudes_centered = np.round(
-            longitudes_centered/target_resolution
-            )*target_resolution
-
-        
-        #array = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
-        
-'''     
 '''
 def aggregate_array_ignore_nan(array, block_size):
     """
