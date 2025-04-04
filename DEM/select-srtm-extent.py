@@ -18,7 +18,7 @@ Extent convention in code follows GDAL commands order (W-N-E-S)
 Because ERA5 convention is N-W-S-E, the naming of the produced files
 follows this order...
 
-This crops the 3arcsecond native resolution DEM derived morphography
+This crops the 1-3arcsecond native resolution DEM derived morphography
 products. Aggregation should be applied to the specified extent files,
 as to match ERA5 grid cell centers and DEM cell centers, and generally
 match the centers of the grid cells for any downscaling resolution...
@@ -26,13 +26,13 @@ match the centers of the grid cells for any downscaling resolution...
 
 import os
 import subprocess
-from osgeo import gdal
+#from osgeo import gdal
 from pathlib import Path
 
 
 nc_file_resolution = 0.1  #era5-land resolution
 input_dem = "output.tif"
-extent = [19.6, 41.8, 28.3, 34.8]  #W-N-E-S
+extent = [19.6, 41.8, 28.3, 35.8]  #W-N-E-S
 #set True if extent corresponds to center of grid cells
 reference_center = True
 #set True if you want to expand out to all directions

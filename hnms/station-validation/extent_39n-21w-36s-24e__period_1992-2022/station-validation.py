@@ -15,6 +15,7 @@ from scipy.stats import linregress
 from scipy.special import kl_div
 from scipy.stats import ks_2samp
 from scipy.stats import wasserstein_distance
+from scipy.stats import anderson_ksamp
 import statsmodels.api as sm
 
 from sklearn.metrics import mean_squared_error
@@ -666,7 +667,7 @@ if visualize == True:
     plt.ylabel('Density')
     plt.grid()
     plt.legend()
-    plt.savefig("histogram.png", dpi=1000)
+    #plt.savefig("histogram.png", dpi=1000)
     plt.show()
     
     
@@ -693,6 +694,49 @@ if visualize == True:
     plt.title("Temperature Scatter Plot")
     plt.axis("square")
     #plt.savefig("scatter-plot-monthly.png", dpi=1000)
+    plt.show()
+
+
+# ECDFs
+sorted_era5land = ecdf(df_stacked_mask.idw)[0]
+sorted_downscaled = ecdf(df_stacked_mask.downscaled)[0]
+sorted_insitu = ecdf(df_stacked_mask.insitu)[0]
+
+cdf_era5land = ecdf(df_stacked_mask.idw)[1]
+cdf_downscaled = ecdf(df_stacked_mask.downscaled)[1]
+cdf_insitu = ecdf(df_stacked_mask.insitu)[1]
+
+if visualize == True:
+    plt.plot(sorted_era5land, cdf_era5land, linestyle="--")
+    plt.plot(sorted_insitu, cdf_downscaled, c="r")
+    plt.plot(sorted_downscaled, cdf_insitu, c="k")
+    plt.legend(
+        ["ERA5-Land", "In-situ", "Downscaled"], 
+        framealpha=0.3
+        )
+    plt.grid()
+    plt.title("Empirical CDF")
+    plt.xlabel("Temperature  [°C]")
+    plt.ylabel("Probability")
+    #plt.savefig("ecdf-temperatures.png", dpi=1000)
+    plt.show()
+    
+    
+    # QQ plots
+    plt.scatter(sorted_insitu, sorted_era5land, s=1)
+    plt.scatter(sorted_insitu, sorted_insitu, s=1, c="k")
+    plt.scatter(sorted_insitu, sorted_downscaled, s=1, alpha=0.75)
+    plt.grid()
+    plt.axis("square")
+    plt.title('Q-Q Plot')
+    plt.ylabel("Modeled Temperature  [°C]")
+    plt.xlabel("Insitu Temperature  [°C]")
+    plt.legend(
+        ["ERA5-Land", "In-situ", "Downscaled"],
+        fontsize=8.5,
+        framealpha=0.3
+        )
+    #plt.savefig("qq-plot.png", dpi=1000)
     plt.show()
 
 
@@ -805,66 +849,6 @@ if visualize == True:
         plt.show()
 
 
-#%% distribution comparison - goodness of fit?
-# ECDFs
-sorted_era5land = ecdf(df_stacked_mask.idw)[0]
-sorted_downscaled = ecdf(df_stacked_mask.downscaled)[0]
-sorted_insitu = ecdf(df_stacked_mask.insitu)[0]
-
-cdf_era5land = ecdf(df_stacked_mask.idw)[1]
-cdf_downscaled = ecdf(df_stacked_mask.downscaled)[1]
-cdf_insitu = ecdf(df_stacked_mask.insitu)[1]
-
-
-if visualize == True:
-    plt.plot(sorted_era5land, cdf_era5land, linestyle="--")
-    plt.plot(sorted_insitu, cdf_downscaled, c="r")
-    plt.plot(sorted_downscaled, cdf_insitu, c="k")
-    plt.legend(
-        ["ERA5-Land", "In-situ", "Downscaled"], 
-        framealpha=0.3
-        )
-    plt.grid()
-    plt.title("Empirical CDF")
-    plt.xlabel("Temperature  [°C]")
-    plt.ylabel("Probability")
-    #plt.savefig("ecdf-temperatures.png", dpi=1000)
-    plt.show()
-    
-    
-    # QQ plots
-    plt.scatter(sorted_insitu, sorted_era5land, s=1)
-    plt.scatter(sorted_insitu, sorted_insitu, s=1, c="k")
-    plt.scatter(sorted_insitu, sorted_downscaled, s=1, alpha=0.75)
-    plt.grid()
-    plt.axis("square")
-    plt.title('Q-Q Plot')
-    plt.ylabel("Modeled Temperature  [°C]")
-    plt.xlabel("Insitu Temperature  [°C]")
-    plt.legend(
-        ["ERA5-Land", "In-situ", "Downscaled"],
-        fontsize=8.5,
-        framealpha=0.3
-        )
-    #plt.savefig("qq-plot.png", dpi=1000)
-    plt.show()
-    
-    
-    # Kullback-Leibler Divergence
-    plt.plot(range(len(df_stacked_mask)), 
-             kl_div(df_stacked_mask.idw, df_stacked_mask.insitu),
-             linewidth=1
-             )
-    plt.plot(range(len(df_stacked_mask)), 
-             kl_div(df_stacked_mask.downscaled, df_stacked_mask.insitu),
-             linewidth=1
-             )
-    plt.legend(["ERA5-Land", "Downscaled"])
-    plt.grid()
-    plt.title("Kullback-Leibler Divergence")
-    plt.show()
-
-
 #%% Statistical tests and other metrics
 '''
 More tests to consider:
@@ -886,28 +870,74 @@ More tests to consider:
         Bootstrap Methods
 '''
 # 2 sided Kolmogorov-Smirnov Test
+# Measures maximum difference between CDFs?
+# Checking if two distributions are significantly different?
+# if p-value<0.05 the modeled distributions are statistically different 
+# from insitu, still though, smaller distances mean better match, which can
+# have practical significance?
 ks_era5land = ks_2samp(df_stacked_mask.insitu, df_stacked_mask.idw)
 ks_downscaled = ks_2samp(df_stacked_mask.insitu, df_stacked_mask.downscaled)
 ks_intercomparison = ks_2samp(df_stacked_mask.idw, df_stacked_mask.downscaled)
 
 print("\n")
-print("2-sided KS test statistics")
-print("ERA5-Land statistics:")
+print("2-sided Kolmogorv-Smirnov Test:")
+print("ERA5-Land vs Insitu:")
 print(f"statistic: {ks_era5land.statistic:.4f}, p-value: {ks_era5land.pvalue:.4f}")
-print("Downscaled statistics:")
+print("Downscaled vs Insitu:")
 print(f"statistic: {ks_downscaled.statistic:.4f}, p-value: {ks_downscaled.pvalue:.4f}")
-print("Intercomparison statistics:")
+print("ERA5-Land vs Downscaled Intercomparison:")
 print(f"statistic: {ks_intercomparison.statistic:.4f}, p-value: {ks_intercomparison.pvalue:.4f}")
 
 
 # Wasserstein Distance (or Earth Mover's Distance)
-# Especially useful if both models give p-value<0.05
-wd_era5land = wasserstein_distance(df_stacked_mask.insitu, df_stacked_mask.idw)
-wd_downscaled = wasserstein_distance(df_stacked_mask.insitu, df_stacked_mask.downscaled)
+# Measures total work needed to move one distribution to another?
+# Comparing overall shape & spread?
+'''
+Especially useful if both models give p-value<0.05?
+Here we can define an improvement threshhold, like 20%
+if wd_downscaled < 0.8*wd_era5land, then we did something...
+'''
+wd_era5land = wasserstein_distance(
+    df_stacked_mask.insitu, df_stacked_mask.idw
+    )
+wd_era5land_normalized = wd_era5land/df_stacked_mask.insitu.std()
+wd_downscaled = wasserstein_distance(
+    df_stacked_mask.insitu, df_stacked_mask.downscaled
+    )
+wd_downscaled_normalized = wd_downscaled/df_stacked_mask.insitu.std()
+wd_intercomparison = wasserstein_distance(
+    df_stacked_mask.idw, df_stacked_mask.downscaled
+    )
 print("\n")
-print("Wasserstein Distances")
-print(f'ERA5-Land: {wd_era5land:.3f}')
-print(f'Downscaled: {wd_downscaled:.3f}')
+print("Wasserstein Distances:")
+print(f'ERA5-Land vs Insitu: {wd_era5land:.3f} °C '
+      f'({wd_era5land_normalized:.3f} normalized)'
+      )
+print(f'Downscaled vs Insitu: {wd_downscaled:.3f} °C '
+      f'({wd_downscaled_normalized:.3f} normalized)'
+      )
+print(f'ERA5-land vs Downscaled Intercomparison: {wd_intercomparison:.3f} °C')
+
+
+# Kullback-Leibler Divergence
+if visualize == True:
+    # Measures information loss when approximating one distribution with another?
+    # Checking how well a model represents the true distribution?
+    # Use KL divergence if you want to measure how much information is lost 
+    # when approximating Insitu with a model?
+    plt.plot(range(len(df_stacked_mask)), 
+             kl_div(df_stacked_mask.idw, df_stacked_mask.insitu),
+             linewidth=1
+             )
+    plt.plot(range(len(df_stacked_mask)), 
+             kl_div(df_stacked_mask.downscaled, df_stacked_mask.insitu),
+             linewidth=1
+             )
+    plt.legend(["ERA5-Land", "Downscaled"])
+    plt.grid()
+    plt.title("Kullback-Leibler Divergence")
+    plt.show()
+
 
 
 #%% koments

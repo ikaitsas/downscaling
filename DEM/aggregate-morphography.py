@@ -28,9 +28,9 @@ from sklearn.impute import KNNImputer
 from skimage.measure import block_reduce
 
 
-target_res = 0.01  # in degrees
+target_res = 0.1  # in degrees
 input_dem = "output.tif"
-extent = [19.6, 41.8, 28.3, 34.8]  #W-N-E-S
+extent = [19.6, 41.8, 28.3, 35.8]  #W-N-E-S
 export_nc_to_device = True
 
 
@@ -63,17 +63,18 @@ for i,morphi in enumerate(morphography):
     #introduce coarse corrections for slope and aspect too
     #like the 
     if morphi == "dem":
-        array[array<-100] = np.nan
+        array[array<-100] = 0
     if morphi == "slope":
         array[array<0] = 0
         
-    
-    gt = ds.GetGeoTransform()
-    rows, cols = ds.RasterYSize, ds.RasterXSize
-    x_min = gt[0] #+ input_dem_native_resolution/2
-    y_max = gt[3] #- input_dem_native_resolution/2
-    x_res = gt[1]
-    y_res = gt[5]
+    #------------------------------------------------------------
+    #apo edw kai katw allakse ta gdal calls me rasterio calls
+    gt = ds.transform
+    rows, cols = ds.height, ds.width
+    x_min = gt[2] #+ input_dem_native_resolution/2
+    y_max = gt[5] #- input_dem_native_resolution/2
+    x_res = gt[0]
+    y_res = gt[4]
     
     latitudes = np.arange(y_max, y_max+rows*y_res, y_res)
     longitudes = np.arange(x_min, x_min+cols*x_res, x_res)
@@ -102,13 +103,15 @@ for i,morphi in enumerate(morphography):
     x_res_agg = target_res
     
     # remove native resolution offset, # and center the grid cell value
+    # and ensure no extra latitudes/longitudes were computed
     latitudes_agg = np.arange(
         y_max, y_max+new_rows*y_res_agg, y_res_agg
         ) + y_res/2 + y_res_agg/2
+    latitudes_agg = latitudes_agg[:array_agg.shape[0]]
     longitudes_agg = np.arange(
         x_min, x_min+new_cols*x_res_agg, x_res_agg
         ) + x_res/2 + x_res_agg/2
-    
+    longitudes_agg = longitudes_agg[:array_agg.shape[1]]
     
     if export_nc_to_device == True:
         # initialize Dataset
@@ -133,12 +136,9 @@ for i,morphi in enumerate(morphography):
 netcdf_name = f"{dem_file_name}-morphography-{target_res}deg.nc"
 netcdf_path = os.path.join(cwd, "outputs", "python", netcdf_name)
 ds_nc.to_netcdf(netcdf_path)
-            
-    
-    
-    
-    
-#%% comments - extras
+
+
+#%% optikopoihsh
 for morphi in morphography:
     fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
     
@@ -148,16 +148,19 @@ for morphi in morphography:
     if morphi == "dem":
         cmap=plt.cm.inferno_r
         label = "Elevation [m]"
+        title = f'{morphi.upper()} - {target_res}°'
         vmin, vmax = 0, np.nanmax(ds_nc[morphi].values)
         
     if morphi == "slope":
         cmap=plt.cm.magma_r
         label = "Slope [°]"
+        title = f'{morphi.capitalize()} - {target_res}°'
         vmin, vmax = 0, np.nanmax(ds_nc[morphi].values)
         
     if morphi == "aspect":
         cmap=plt.cm.twilight
         label = "Aspect [°]"
+        title = f'{morphi.capitalize()} - {target_res}°'
         vmin, vmax = -1, np.nanmax(ds_nc[morphi].values)
     
     #try the following with plt.pcolormesh() too
@@ -172,21 +175,21 @@ for morphi in morphography:
         vmin=vmin, vmax=vmax
     )
     
-    ax.coastlines(resolution="10m", linewidth=0.75)
-    ax.add_feature(cfeature.BORDERS, linestyle=":")
+    ax.coastlines(resolution="10m", linewidth=0.25)
+    ax.add_feature(cfeature.BORDERS, linestyle="--", linewidth=0.25)
     ax.add_feature(cfeature.LAND)
     
-    gl = ax.gridlines(draw_labels=True, linestyle=":", 
-                      linewidth=0.5, color="k",
+    gl = ax.gridlines(draw_labels=True, linestyle="--", 
+                      linewidth=0.25, color="gray",
                       xlocs=np.arange(
                           extent[0], 
                           extent[2], 
-                          0.1
+                          0.3
                           ),  #or: mticker.FixedLocator
                       ylocs=np.arange(
                           extent[1], 
                           extent[3], 
-                          -0.1
+                          -0.3
                           ) 
                       )
     gl.top_labels = False
@@ -201,11 +204,13 @@ for morphi in morphography:
         lambda y, _: f"{y:.1f}" if y in ds.latitude.values[::5] else ""
         )
     '''
-    ax.set_title(f'{morphi}-{target_res}deg')
-    plt.savefig(f'outputs\\images\\{morphi}-{target_res}deg.png', dpi=1000)
+    ax.set_title(title)
+    plt.savefig(f'outputs\\images\\{morphi}-{target_res}deg.png', 
+                dpi=1000, bbox_inches="tight")
     plt.show()
     
 
+#%% koments
 '''
 #very good aggregating method too, very readable
 #bu it can thandle NaN values
