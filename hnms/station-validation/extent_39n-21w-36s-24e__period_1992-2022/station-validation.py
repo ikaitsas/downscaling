@@ -13,6 +13,8 @@ import xarray as xr
 from scipy import stats
 from scipy.stats import linregress
 from scipy.special import kl_div
+from scipy.stats import ks_2samp
+from scipy.stats import wasserstein_distance
 import statsmodels.api as sm
 
 from sklearn.metrics import mean_squared_error
@@ -402,6 +404,13 @@ def compute_metrics(group, mask):
             ),
     })
 
+def ecdf(data):
+    '''
+    Returns an array of the sorted data
+    And the ecdf value for each sorted datapoint
+    '''
+    return np.sort(data), np.arange(1, len(data) + 1) / len(data)
+
 
 #%% dokimastiko
 temp_target = idw_interpolation(
@@ -568,7 +577,7 @@ for i in range(len(stations)):
 
 
 
-#%% Fitting and statistical testing
+#%% Linear Fitting and Distribution Visualization
 # These below get stacked "horizontally" (per station first)
 # if future_stack=True specified, dont specify dropna=False
 dfLD_stacked = dfLD.stack(future_stack=True)
@@ -605,7 +614,10 @@ modelHD = sm.OLS(YHD, X)
 resultsLD = modelLD.fit()
 resultsHD = modelHD.fit()
 
+print("\nLinear regression parameters:")
+print("For ERA5-Land:")
 print(resultsLD.params)
+print("For Downscaled:")
 print(resultsHD.params)
 
 
@@ -621,6 +633,7 @@ t_stat, p_value = stats.ttest_1samp(error_diff, 0)
 
 
 if visualize == True:
+    '''
     # Histogram and Boxplot for Error Distribution visual inspection
     plt.subplot(1, 2, 1)
     sns.histplot(errorERA5, color='blue', kde=True, label='ERA5', bins=10, stat='density')
@@ -642,7 +655,7 @@ if visualize == True:
     
     plt.tight_layout()
     plt.show()
-    
+    '''
     
     # Histogram for Temperature Distribution
     sns.histplot(df_stacked_mask.idw, color='blue', kde=True, label='ERA5-Land', bins=10, stat='density')
@@ -653,9 +666,11 @@ if visualize == True:
     plt.ylabel('Density')
     plt.grid()
     plt.legend()
+    plt.savefig("histogram.png", dpi=1000)
     plt.show()
     
     
+    # Linear fitting between insitu and modeled temperatures
     x= np.linspace(3, 32, 100)
     yLD = slopeLD*x+interceptLD
     yHD = slopeHD*x+interceptHD
@@ -681,7 +696,7 @@ if visualize == True:
     plt.show()
 
 
-#%% Performance metrics
+#%% Performance Metrics
 mseLD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.idw)
 mseHD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
 maeLD = mean_absolute_error(df_stacked_mask.insitu, df_stacked_mask.idw)
@@ -741,7 +756,6 @@ station_metrics["insitu_variance"] = df_stacked[mask].groupby(
 #%% Metrics Visualization
 if visualize == True:
     for metric in ["mse", "mae", "mbe", "ubrmse"]:
-        print(metric+"LD", metric+"HD")
         # Merge the 2 plots in a subplot...
         # stations.name[stations.WMO_code.isin(station_metrics.index)]
         
@@ -791,15 +805,112 @@ if visualize == True:
         plt.show()
 
 
+#%% distribution comparison - goodness of fit?
+# ECDFs
+sorted_era5land = ecdf(df_stacked_mask.idw)[0]
+sorted_downscaled = ecdf(df_stacked_mask.downscaled)[0]
+sorted_insitu = ecdf(df_stacked_mask.insitu)[0]
+
+cdf_era5land = ecdf(df_stacked_mask.idw)[1]
+cdf_downscaled = ecdf(df_stacked_mask.downscaled)[1]
+cdf_insitu = ecdf(df_stacked_mask.insitu)[1]
+
+
+if visualize == True:
+    plt.plot(sorted_era5land, cdf_era5land, linestyle="--")
+    plt.plot(sorted_insitu, cdf_downscaled, c="r")
+    plt.plot(sorted_downscaled, cdf_insitu, c="k")
+    plt.legend(
+        ["ERA5-Land", "In-situ", "Downscaled"], 
+        framealpha=0.3
+        )
+    plt.grid()
+    plt.title("Empirical CDF")
+    plt.xlabel("Temperature  [°C]")
+    plt.ylabel("Probability")
+    #plt.savefig("ecdf-temperatures.png", dpi=1000)
+    plt.show()
+    
+    
+    # QQ plots
+    plt.scatter(sorted_insitu, sorted_era5land, s=1)
+    plt.scatter(sorted_insitu, sorted_insitu, s=1, c="k")
+    plt.scatter(sorted_insitu, sorted_downscaled, s=1, alpha=0.75)
+    plt.grid()
+    plt.axis("square")
+    plt.title('Q-Q Plot')
+    plt.ylabel("Modeled Temperature  [°C]")
+    plt.xlabel("Insitu Temperature  [°C]")
+    plt.legend(
+        ["ERA5-Land", "In-situ", "Downscaled"],
+        fontsize=8.5,
+        framealpha=0.3
+        )
+    #plt.savefig("qq-plot.png", dpi=1000)
+    plt.show()
+    
+    
+    # Kullback-Leibler Divergence
+    plt.plot(range(len(df_stacked_mask)), 
+             kl_div(df_stacked_mask.idw, df_stacked_mask.insitu),
+             linewidth=1
+             )
+    plt.plot(range(len(df_stacked_mask)), 
+             kl_div(df_stacked_mask.downscaled, df_stacked_mask.insitu),
+             linewidth=1
+             )
+    plt.legend(["ERA5-Land", "Downscaled"])
+    plt.grid()
+    plt.title("Kullback-Leibler Divergence")
+    plt.show()
+
+
+#%% Statistical tests and other metrics
+'''
+More tests to consider:
+    Goodness-of-Fit to Insitu:
+        Kolmogorov-Smirnov Test (done)
+        Anderson-Darling Test
+        Cramér-von Mises Test
+        
+    Comparing Means and Variances:
+        T-Test (for means)
+        F-Test or Levene’s Test (for variance)
+        
+    Closeness of Distributions:
+        Kullback-Leibler Divergence
+        Earth Mover’s Distance (done)
+        
+    Comparison between ERA5-Land and Downscaled:
+        Paired T-Test or Wilcoxon Signed-Rank Test
+        Bootstrap Methods
+'''
+# 2 sided Kolmogorov-Smirnov Test
+ks_era5land = ks_2samp(df_stacked_mask.insitu, df_stacked_mask.idw)
+ks_downscaled = ks_2samp(df_stacked_mask.insitu, df_stacked_mask.downscaled)
+ks_intercomparison = ks_2samp(df_stacked_mask.idw, df_stacked_mask.downscaled)
+
+print("\n")
+print("2-sided KS test statistics")
+print("ERA5-Land statistics:")
+print(f"statistic: {ks_era5land.statistic:.4f}, p-value: {ks_era5land.pvalue:.4f}")
+print("Downscaled statistics:")
+print(f"statistic: {ks_downscaled.statistic:.4f}, p-value: {ks_downscaled.pvalue:.4f}")
+print("Intercomparison statistics:")
+print(f"statistic: {ks_intercomparison.statistic:.4f}, p-value: {ks_intercomparison.pvalue:.4f}")
+
+
+# Wasserstein Distance (or Earth Mover's Distance)
+# Especially useful if both models give p-value<0.05
+wd_era5land = wasserstein_distance(df_stacked_mask.insitu, df_stacked_mask.idw)
+wd_downscaled = wasserstein_distance(df_stacked_mask.insitu, df_stacked_mask.downscaled)
+print("\n")
+print("Wasserstein Distances")
+print(f'ERA5-Land: {wd_era5land:.3f}')
+print(f'Downscaled: {wd_downscaled:.3f}')
+
+
 #%% koments
-plt.plot(range(len(df_stacked_mask)), kl_div(df_stacked_mask.idw, df_stacked_mask.insitu))
-plt.plot(range(len(df_stacked_mask)), kl_div(df_stacked_mask.downscaled, df_stacked_mask.insitu))
-plt.legend(["ERA5-Land", "Downscaled"])
-plt.grid()
-plt.title("Kullback-Leibler Divergence")
-plt.show()
-
-
 
 '''
 correlation = df_stacked[["insitu", "idw", "downscaled"]].corr()
