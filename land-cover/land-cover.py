@@ -22,18 +22,27 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-extent = [39, 24, 36, 21]
+extent = [44, 17, 34, 32]
 years = list(range(1992,2023))
-single_year = 1992
+single_year = 2021
 
 
 #%% extracting file location - NEED TO MAKE THIS A FUNCTION
-extent_string =  f'{extent[0]}.{extent[1]}.{extent[-2]}.{extent[-1]}'
+# epishmo
+#extent_string =  f'{extent[0]}.{extent[1]}.{extent[-2]}.{extent[-1]}'
+# apo request
+extent_string =  f'N{extent[0]}-W{extent[1]}-S{extent[-2]}-E{extent[-1]}'
 
+
+'''
+# epishma
 subfolder = (
     f'area-subset.{extent_string}'
     )
-folder = os.path.join("data", subfolder)
+'''
+# apo requests
+subfolder = f'extent__{extent_string}'
+folder = os.path.join("outputs", subfolder)
 os.makedirs(folder, exist_ok=True)
 
 year = single_year
@@ -44,10 +53,15 @@ else:
     version = "v2.0.7cds"
     convention = "ESACCI"
 
+'''
+# epishmh onomasia
 filename = (
     f'{convention}-LC-L4-LCCS-Map-300m-P1Y-{year}-{version}.area-subset.{extent_string}'
     f'.nc'
     )
+'''
+# onomasia apo requests
+filename = (f'land-cover__{extent_string}__Period{year}.nc')
 file_path = os.path.join(folder, filename)
 
 

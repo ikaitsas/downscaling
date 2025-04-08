@@ -19,7 +19,7 @@ outputs are stored in the outputs folder, in the corresponding extent subfolder
 import os
 import cdsapi
 
-extent = [39, 21, 36, 24]
+extent = [44, 17, 34, 32]
 single_year = 2021
 multiple_requests = False
 years = list(range(1992,2023))

@@ -8,9 +8,11 @@ ADD SOME NAN VALUES PROCESSING, SOME AREAS ARE A BIT WEIRD, LIKE CRETE
 ALSO THE EDGES NEED SOME TWEAKING, SLOPE TAKES THEM INTO ACCOUNT
 """
 import os
+import rasterio
+import subprocess
 import numpy as np
 import xarray as xr
-from osgeo import gdal
+#from osgeo import gdal
 from pathlib import Path
 import matplotlib.pyplot as plt
 
@@ -23,31 +25,34 @@ export_nc_to_device = False
 export_Gtiff_to_device = False
 plot_morphography = False
 #"delete" some datasets - might help with memory?
-save_memory = True
+save_memory = False
 
 
 #%% Import DEM - extract metadata
 cwd = Path.cwd()
 input_dem = os.path.join(cwd, f"{dem_file_name}")
-ds = gdal.Open(input_dem)
 
-gt = ds.GetGeoTransform()
-rows, cols = ds.RasterYSize, ds.RasterXSize
+ds = rasterio.open(input_dem)
 
-latitudes = np.linspace(gt[3], gt[3] + gt[5] * rows, rows)
-longitudes = np.linspace(gt[0], gt[0] + gt[1] * cols, cols)
+gt = ds.transform
+rows, cols = ds.height, ds.width
 
-dem = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
+latitudes = np.linspace(gt[5], gt[5] + gt[4] * rows, rows)
+longitudes = np.linspace(gt[2], gt[2] + gt[0] * cols, cols)
+
+dem = ds.read(1).astype(np.float32)
+
+dem[dem<-500] = np.nan
 
 #find center latitude for scaling factor
-top = gt[3]
-bot = top + gt[5]*ds.RasterYSize
+top = gt[5]
+bot = top + gt[4]*ds.height
 
-left = gt[0]
-right = left + gt[1]*ds.RasterXSize
+left = gt[2]
+right = left + gt[0]*ds.width
 
-res_lat = abs(gt[5])
-res_lon = abs(gt[1])
+res_lat = abs(gt[4])
+res_lon = abs(gt[0])
 
 
 idx_rows = np.arange(rows)
@@ -64,7 +69,7 @@ meters_dy = res_lat * meters_latitude
 
 
 #%% Slope computation - central differences
-slope_file_name = f"{dem_file_name[:-4]}-slope.tif"
+slope_file_name = f"{dem_file_name[:-4]}-slope-v2.tif"
 slope_path = os.path.join(cwd, slope_file_name)
 
 # Differences computation
@@ -89,25 +94,36 @@ dz_dy[-1, :] = (dem[-1, :] - dem[-2, :]) / meters_dy
 
 # Compute gradient magnitude and slope
 gradient_magnitude = np.sqrt(dz_dx**2 + dz_dy**2)
+dz_dx = None
+dz_dy = None
 slope_radians = np.arctan(gradient_magnitude)
+gradient_magnitude = None
 slope_degrees = np.round( np.degrees(slope_radians) )
+slope_radians = None
+
 
 # Export a GTiff image of the computed slope
 if export_Gtiff_to_device == True:
-    driver = gdal.GetDriverByName("GTiff")
-    out_ds = driver.Create(slope_file_name, cols, rows, 1, gdal.GDT_Float32)
-    out_ds.SetGeoTransform(gt)
-    out_ds.SetProjection(ds.GetProjection())
-    out_band = out_ds.GetRasterBand(1)
-    out_band.WriteArray(slope_degrees)
-    out_band.SetNoDataValue(-9999)
-    out_band.FlushCache()
+    #can also be done with rasterio.open(...) as out_ds: out_ds.write(...)
+    out_ds = rasterio.open(
+        slope_path,
+        "w",
+        driver="GTiff",
+        height=rows,
+        width=cols,
+        count=1,
+        dtype=slope_degrees.dtype,
+        crs='+proj=latlong',
+        transform=gt,
+        )
+    out_ds.write(slope_degrees,1)
+    out_ds.close()
 
 
 #%% Aspect Computation - GDAL
-aspect_file_name = f"{dem_file_name[:-4]}-aspect.tif"
+aspect_file_name = f"{dem_file_name[:-4]}-aspect-v2.tif"
 aspect_path = os.path.join(cwd, aspect_file_name)
-
+'''
 aspect_options = gdal.DEMProcessingOptions(
     computeEdges=True,
     alg="Horn",
@@ -118,11 +134,30 @@ gdal.DEMProcessing(aspect_path, input_dem, "aspect", options=aspect_options)
 
 ds_aspect = gdal.Open(aspect_path)
 aspect = ds_aspect.GetRasterBand(1).ReadAsArray().astype(np.float32)
+'''
+cmd_aspect = [
+    "gdaldem",
+    "aspect",
+    input_dem,
+    aspect_path,
+    "-compute_edges",
+    "-alg", "Horn",
+    "-of", "GTiff"
+    ]
 
+run_aspect = subprocess.run(cmd_aspect, 
+                            capture_output=True, 
+                            text=True)
+print("gdaldem aspect Standard Output:", run_aspect.stdout)
+print("gdaldem aspect Standard Error:", run_aspect.stderr)
+
+ds_aspect = rasterio.open(aspect_path)
+aspect = ds_aspect.read(1).astype(np.float32)
+    
 #round values to the nearest subdivision specified - must be >0
 #e.g. 10 means values get shifted to the closest XX0.0
 #e.g. 0.1 means values get shifted to the closest XXX.1
-round_to_nearest = 1
+round_to_nearest = 5
 
 if  round_to_nearest > 0:
     aspect = np.round( aspect/round_to_nearest ) * round_to_nearest
@@ -180,18 +215,18 @@ print(f"Slope calculation complete. Output saved as {slope_file_name}")
 
 if plot_morphography == True:
     plt.title("DEM - in Meters")
-    plt.imshow(dem, cmap="inferno")
+    plt.imshow(dem, cmap="inferno_r")
     #plt.savefig(f"{dem_file_name[:-4]}-dem.png", dpi=1000)
     plt.show()
     
     plt.title("Slope - in Degrees")
-    plt.imshow(slope_degrees, cmap="magma")
-    #plt.savefig(f"{slope_file_name[:-4]}.png", dpi=1000)
+    plt.imshow(slope_degrees, cmap="magma_r")
+    plt.savefig(f"{slope_file_name[:-4]}.png", dpi=1000)
     plt.show()
     
     plt.title("Aspect - in Degrees")
     plt.imshow(aspect, cmap="twilight_r")
-    #plt.savefig(f"{dem_file_name[:-4]}-aspect.png", dpi=1000)
+    plt.savefig(f"{dem_file_name[:-4]}-aspect.png", dpi=1000)
     plt.show()
 
 
