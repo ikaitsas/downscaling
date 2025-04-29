@@ -4,7 +4,7 @@ Created on Tue Feb 17 12:42:11 2025
 
 @author: yiann
 
-Tidying up ERA5-Land data and import DEM-derived morphography metadata 
+Tidying up ERA5-Land data and import DEM-derived morphography metadata
 in the respective coordinates
 
 Will probably add land cover data in here too
@@ -25,7 +25,7 @@ import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
 
 
-extent = [41.8, 19.6, 35.8, 28.3]
+extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 years = list(range(1992,2023))
 timescale = 'monthly'
 visualize = True
@@ -176,6 +176,7 @@ t2mHD = t2mHD.sel(
 
 #%% extract as arrays- might be applicable for large datasets
 # MAKE SURE THESE ARE PERFECTLY ALIGNED, LETS SAY C-STYLE (DEFAULT)
+'''
 time_levels = t2mHD.valid_time.shape[0]
 
 X_flat = t2mHD.values.reshape(time_levels,-1)
@@ -188,7 +189,7 @@ hd_longitude = t2mHD.longitude.values.astype(np.float32)
 hd_dem = np.tile(t2mHD.dem.values.flatten(), hd_months.shape).astype(np.int16)
 hd_slope = np.tile(t2mHD.slope.values.flatten(), hd_months.shape).astype(np.float32)
 hd_aspect = np.tile(t2mHD.aspect.values.flatten(), hd_months.shape).astype(np.int16)
-
+'''
 
 
 #%% convert to dataframe - not applicable for very large datasets
@@ -196,6 +197,11 @@ print(f'Extracting {era5Land_resolution/scaling_factor}deg HD dataframe...')
 '''
 
 '''
+# since, i think, the fitting extra trees algorithm does not take into account
+# the year, the HD version of the geographic area can be taken for 12 months,
+# as only the month is the temporal covariate needed.
+# the HD dataframe can contain only a year's wort hof downscaled data.
+# residual downscaling can be done on a different dataset/dataarray.
 dfHD = t2mHD.to_dataframe(name='t2m')
 
 
@@ -317,12 +323,12 @@ if visualize == True:
         #vmin=-1, vmax=360
     )
     
-    ax.coastlines(resolution="10m", linewidth=0.75)
-    ax.add_feature(cfeature.BORDERS, linestyle=":")
+    ax.coastlines(resolution="10m", linewidth=0.35)
+    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25)
     ax.add_feature(cfeature.LAND)
     
-    gl = ax.gridlines(draw_labels=True, linestyle=":", 
-                      linewidth=0.5, color="k",
+    gl = ax.gridlines(draw_labels=True, linestyle="--", 
+                      linewidth=0.25, color="gray",
                       xlocs=np.arange(
                           ds.longitude.values.min(), 
                           ds.longitude.values.max(), 
@@ -348,7 +354,7 @@ if visualize == True:
     '''
     ax.set_title(f"Temperature {np.datetime_as_string(ds.valid_time.values[valid_time_index], unit='M')}")
     #ax.set_title('Tem')
-    #plt.savefig('images-maps\\t2m-era5-land-cartopy.png', dpi=1000)
+    #plt.savefig('images-maps\\t2m-era5-land-cartopy-almost-whole-agean.png', dpi=1000, bbox_inches="tight")
     plt.show()
     
     #t2m = None
