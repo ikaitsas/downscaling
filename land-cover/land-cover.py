@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 
 extent = [44, 17, 34, 32]
 years = list(range(1992,2023))
-single_year = 1992
+single_year = 1997
 
 target_resolution = 0.1
 target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
