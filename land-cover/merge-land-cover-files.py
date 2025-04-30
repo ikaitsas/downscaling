@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 
 years = list(range(1992,2023))
-target_resolution = 0.01
+target_resolution = 0.1
 target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 
 file_paths = []
@@ -47,8 +47,8 @@ def extract_rgb(dataarray, rgb_attribute="rgb_code"):
     return rgb_dict
 
 def create_rgb_color_array(array, rgb_dict):
-    # can only handle 2d and 3d arrays, with the 3d arrrays being
-    # in the form (time, height, width)
+    # can only handle 3d and 2d arrays, with the 3d arrrays being
+    # in the form (time, height, width), the 2d (height, width)
     if array.ndim == 3:
         rgb_image  = np.zeros(
             (array.shape[0], array.shape[1], array.shape[2], 3), 

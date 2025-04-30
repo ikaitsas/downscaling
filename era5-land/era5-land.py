@@ -39,6 +39,10 @@ downscaling_year_start = 2017
 dem = xr.open_dataset("output-morphography-0.1deg.nc")
 demHD = xr.open_dataset("output-morphography-0.01deg.nc")
 
+lc = xr.open_dataarray("land-cover-0.1deg-bigger.nc")
+lcHD = xr.open_dataarray("land-cover-0.01deg-bigger.nc")
+
+
 
 #%% extracting file location - NEED TO MAKE THIS A FUNCTION
 extent_string =  f'N{extent[0]}-W{extent[1]}-S{extent[-2]}-E{extent[-1]}'
@@ -79,13 +83,27 @@ ds.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 ds.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
 ds.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
+lc = lc.astype("uint8")
+lc = lc.rename(year='valid_year').sel(valid_year=ds['valid_year'])
+lc = lc.assign_coords(
+    latitude=ds.latitude,
+    longitude=ds.longitude
+) # eliminate various float point mismatches
+ds.coords["land_cover"] = lc
+'''
+# care, doing:
+ds.coords["land_cover"] = (("valid_year", "latitude", "longitude"), lc.data)
+# will leave the land_cover coordinate unaligned with the keys of ds, meaning
+# that it wont be able to be directly mapped in case of selections, because
+# valid_time != valid_year, alignment must be done explicitly, using .sel or
+# .interp
+'''
+
 if "number" in ds.coords:
     ds = ds.reset_coords(["number"], drop=True)
 if "expver" in ds.coords:
     ds = ds.reset_coords(["expver"], drop=True)
 
-
-t2m_array = ds.t2m.to_numpy()
 
 era5Land_resolution = 0.1
 print(f'Extracting dataframe from {era5Land_resolution}deg ERA5-Land data...')
@@ -103,6 +121,7 @@ column_to_keep = [t2mColumn,
                   ds.dem.name, 
                   ds.slope.name,
                   ds.aspect.name,
+                  ds.land_cover.name,
                   ds.valid_year.name,
                   ds.valid_month.name
                   ]
@@ -122,9 +141,15 @@ if "valid_time" in df.columns:
     df = df.drop(columns=['valid_time'])
 
 df = df[column_to_keep]  #ensure t2m is always first column
-df = df.reset_index(drop=True)
 
-ddf = from_pandas(df, int(ds.valid_month.values.shape[0]/2))
+if save_to_device == True:
+    df.to_parquet("df.parquet")
+    ds.t2m.to_netcdf("t2m.nc")
+
+#df = df.reset_index(drop=True)
+#ddf = from_pandas(df, int(ds.valid_month.values.shape[0]/2))
+df = None
+lc = None
 
 
 #%% create downscalign HD array
@@ -135,6 +160,7 @@ print('Producing HD version...')
 print(f'Dividing each grid cell {scaling_factor}x{scaling_factor} times...')
 #axis=1 latitude, axis=2 longitude, change accordingly
 #will probably add index extraction from Dataset dimensions
+t2m_array = ds.t2m.to_numpy()
 hd_t2m_array = np.repeat(
     np.repeat(t2m_array, scaling_factor, axis=1), scaling_factor, axis=2)
 
@@ -152,6 +178,7 @@ t2mHD = xr.DataArray(hd_t2m_array,
                      dims=["valid_time", "latitude", "longitude"]
                      )
 hd_t2m_array = None
+t2m_array = None
 
 t2mHD.coords["dem"] = (["latitude", "longitude"], demHD.dem.data)
 t2mHD.coords["dem"].attrs["units"] = "meters"
@@ -168,10 +195,23 @@ t2mHD.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 t2mHD.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
 t2mHD.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
+lcHD = lcHD.astype("uint8")
+lcHD = lcHD.rename(year='valid_year').sel(valid_year=t2mHD['valid_year'])
+lcHD = lcHD.assign_coords(
+    latitude=t2mHD.latitude,
+    longitude=t2mHD.longitude
+) # eliminate various float point mismatches
+t2mHD.coords["land_cover"] = lcHD
+
+
+'''
 # Keep only part for downscaling - dont use this in training
 t2mHD = t2mHD.sel(
     valid_time=t2mHD.valid_time[t2mHD.valid_year >= downscaling_year_start]
     )
+'''
+
+lcHD = None
 
 
 #%% extract as arrays- might be applicable for large datasets
@@ -202,39 +242,66 @@ print(f'Extracting {era5Land_resolution/scaling_factor}deg HD dataframe...')
 # as only the month is the temporal covariate needed.
 # the HD dataframe can contain only a year's wort hof downscaled data.
 # residual downscaling can be done on a different dataset/dataarray.
-dfHD = t2mHD.to_dataframe(name='t2m')
+'''
+dfHD = t2mHD.stack(
+    points=("latitude", "longitude")
+    ).to_series().reset_index(name="t2m")  # needs a lot of memeory...
+'''
+#dfHD = t2mHD.to_dataframe(name='t2m') # need a lot of memory...
+
+# since extracting the whole thing at once is memory intensive, i will 
+# extract a few years at a time as a dataframe, and use them later...
+valid_time = t2mHD.valid_time.to_index()
+
+years_per_file = 4
+start_years = range(valid_time[0].year, valid_time[-1].year + 1, years_per_file)
+
+for start_year in start_years:
+    end_year = start_year + years_per_file - 1
+    if end_year > valid_time[-1].year:
+        end_year = valid_time[-1].year
+    print(f"Extracting Period {start_year}-{end_year} as Dataframe...")
+    # Select time slice
+    mask = (valid_time.year >= start_year) & (valid_time.year <= end_year)
+    t2mHD_subset = t2mHD.sel(valid_time=valid_time[mask])
+
+    # Skip if no data in this range
+    if t2mHD_subset.valid_time.size == 0:
+        continue
+
+    # can optimize further with:
+    # .stack(points=("latitude", "longitude")).to_series()) ??
+    dfHD = t2mHD_subset.to_dataframe(name="t2m")#.reset_index()
+    
+    if ("valid_time" in dfHD.index.names) & ("valid_month" not in dfHD.columns):
+        print("f")
+        dfHD['valid_time'] = dfHD.index.get_level_values("valid_time")  #lvl-0
+        dfHD['valid_year'] = dfHD.valid_time.dt.year
+        dfHD['valid_month'] = dfHD.valid_time.dt.month
+
+    if "latitude" in dfHD.index.names:
+        dfHD['latitude'] = dfHD.index.get_level_values("latitude")      #lvl-1
+    if "longitude" in dfHD.index.names:
+        dfHD['longitude'] = dfHD.index.get_level_values("longitude")    #lvl-2
+
+    if "valid_time" in dfHD.columns:
+        dfHD = dfHD.drop(columns=['valid_time'])
+
+    #dfHD = dfHD.loc[:, column_to_keep]
+
+    if save_to_device == True:
+        filename = f"dfHD-{start_year}-{end_year}.parquet"
+        dfHD.loc[:, column_to_keep].to_parquet(filename)
+        print(f"Saved: {filename}")
 
 
-if ("valid_time" in dfHD.index.names) & ("valid_month" not in dfHD.columns):
-    print("f")
-    dfHD['valid_time'] = dfHD.index.get_level_values("valid_time")  #lvl-0
-    dfHD['valid_year'] = dfHD.valid_time.dt.year
-    dfHD['valid_month'] = dfHD.valid_time.dt.month
-
-if "latitude" in dfHD.index.names:
-    dfHD['latitude'] = dfHD.index.get_level_values("latitude")      #lvl-1
-if "longitude" in dfHD.index.names:
-    dfHD['longitude'] = dfHD.index.get_level_values("longitude")    #lvl-2
-
-if "valid_time" in dfHD.columns:
-    dfHD = dfHD.drop(columns=['valid_time'])
-
-dfHD = dfHD[column_to_keep]
-#dfHD = dfHD.reset_index(drop=True)
-
-
-#%% exportation to device
 if save_to_device == True:
     # HD is for high resolution auxilliary variables
     # t2mHD is not "HD" by itself, just repeated
-    
-    df.to_parquet("df.parquet")
-    ds.to_netcdf("t2m.nc")
-    
-    dfHD.to_parquet("dfHD.parquet")
     t2mHD.to_netcdf("t2mHD.nc")
-    
 
+
+#%% exportation to device for NN training
 if extract_nn_training_data == True:
 # Bring data to a tensor format
 # Create a CNN channel-based feature map
