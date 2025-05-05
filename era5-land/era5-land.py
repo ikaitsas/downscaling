@@ -253,7 +253,7 @@ dfHD = t2mHD.stack(
 # extract a few years at a time as a dataframe, and use them later...
 valid_time = t2mHD.valid_time.to_index()
 
-years_per_file = 4
+years_per_file = 5
 start_years = range(valid_time[0].year, valid_time[-1].year + 1, years_per_file)
 
 for start_year in start_years:
@@ -399,12 +399,12 @@ if visualize == True:
                       xlocs=np.arange(
                           ds.longitude.values.min(), 
                           ds.longitude.values.max(), 
-                          degree_spacing
+                          4*degree_spacing
                           ),  #or: mticker.FixedLocator
                       ylocs=np.arange(
                           ds.latitude.values.max(), 
                           ds.latitude.values.min(), 
-                          -degree_spacing
+                          -4*degree_spacing
                           ) 
                       )
     gl.top_labels = False
@@ -421,7 +421,7 @@ if visualize == True:
     '''
     ax.set_title(f"Temperature {np.datetime_as_string(ds.valid_time.values[valid_time_index], unit='M')}")
     #ax.set_title('Tem')
-    #plt.savefig('images-maps\\t2m-era5-land-cartopy-almost-whole-agean.png', dpi=1000, bbox_inches="tight")
+    #plt.savefig('images-maps\\t2m-era5-land-cartopy-almost-whole-agean.png', dpi=2000, bbox_inches="tight")
     plt.show()
     
     #t2m = None
