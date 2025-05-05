@@ -24,23 +24,122 @@ RIGHT NOW I DID THE EXTRACTION YEAR BY YEAR
 """
 
 import os
+import ast
 import numpy as np
 import xarray as xr
 import pandas as pd
 from scipy.stats import mode
 import matplotlib.pyplot as plt
+from collections import Counter
 
 
-extent = [44, 17, 34, 32]
-years = list(range(1992,2023))
-single_year = 1997
-
+single_year = 2022
 target_resolution = 0.1
 target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 
+export_to_device = True
+visualize = False
+
+
+#%% constants and functions
 era5_resolution = 0.1  # resolution for era5-land
+extent = [44, 17, 34, 32]
+years = list(range(1992,2023))
 reference_center = True
 expand_to_all_directions = True
+
+
+def find_mean_of_groups(arr, group_size=None):
+    if group_size==None:
+        group_size=2
+    # Reshape the array to group the elements into the desired size
+    # This excludes leftover elements
+    reshaped_arr = arr[:len(arr) - len(arr) % group_size].reshape(-1, group_size)
+    # Calculate the mean of each group (along axis 1)
+    mean_arr = np.mean(reshaped_arr, axis=1)
+    return mean_arr
+
+
+def find_majority(arr, exception_value=6):  # 6 for water
+    N, M, K = arr.shape
+    result = np.empty((N, M), dtype=arr.dtype)
+    
+    for i in range(N):
+        for j in range(M):
+            values = arr[i, j, :]
+            counts = Counter(values)
+            sorted_by_frequency_counts = counts.most_common()
+
+            top_value, top_count = sorted_by_frequency_counts[0]
+            top_value = int(top_value)
+            top_count = int(top_count)
+            if top_value==exception_value & int((top_count/K))<=0.5:
+                # If exception_value is the mode and there’s another option, use next best
+                if len(sorted_by_frequency_counts)>1:
+                    result[i, j] = sorted_by_frequency_counts[1][0]
+                else:
+                    result[i, j] = top_value  # fallback: all values are exception
+            else:
+                result[i, j] = top_value
+
+    return result
+
+
+def find_median_of_groups(arr, factor=2, height_axis=0, width_axis=1,
+                          method="find_majority" #"scipy_mode" other option
+                          ):
+    # Right now method="scipy_mode" converts grid celsl where water (class=6)
+    # is the plurality (majority but ratio<0.5) to water, which is not 
+    # best for land cover, as land is more than water there
+    # Please use method="find_majority" - it is still faster than scipy.mode...
+    new_rows = int(arr.shape[height_axis]//factor) 
+    new_cols = int(arr.shape[width_axis]//factor)
+    
+    reshaped = arr.reshape(new_rows, factor, new_cols, factor)
+    reshaped = np.transpose(reshaped, (0,2,1,3))
+    reshaped_flat = reshaped.reshape(
+        reshaped.shape[0], reshaped.shape[1], factor*factor
+        )
+    
+    if method == "find_majority":
+        median_arr = find_majority(reshaped_flat, exception_value=6)
+    elif method == "scipy_mode":
+        mode(reshaped_flat, axis=2).mode.squeeze()
+    else:
+        median_arr = find_majority(reshaped_flat, exception_value=6)
+    return median_arr
+
+
+def extract_rgb(dataarray, rgb_attribute="rgb_code"):
+    rgb_string = dataarray.attrs[rgb_attribute]
+    rgb_dict = ast.literal_eval(rgb_string)
+    return rgb_dict
+
+
+def create_rgb_color_array(array, rgb_dict):
+    # can only handle 3d and 2d arrays, with the 3d arrrays being
+    # in the form (time, height, width), the 2d (height, width)
+    if array.ndim == 3:
+        rgb_image  = np.zeros(
+            (array.shape[0], array.shape[1], array.shape[2], 3), 
+            dtype=np.uint8
+            )
+        for code, color in rgb_dict.items():
+            mask = array == code
+            for i in range(3):  # Assign RGB channels
+                rgb_image[:, :, :, i][mask] = color[i]
+    elif array.ndim == 2:
+        rgb_image  = np.zeros(
+            (array.shape[0], array.shape[1], 3), 
+            dtype=np.uint8
+            )
+        for code, color in rgb_dict.items():
+            mask = array == code
+            for i in range(3):  # Assign RGB channels
+                rgb_image[:, :, i][mask] = color[i]
+    else:
+        raise ValueError("Input array must be 2D or 3D (time, height, width)")
+    return rgb_image
 
 
 #%% setting up the aggregated, aligned, cropped land cover
@@ -188,16 +287,16 @@ for class_name, class_value, class_color in zip(
 # visualize the original land cover
 # need to make the following code snippet a function, that takes
 # as inputs the class_color_mapping, and the land cover array
-for class_code, color in class_color_mapping.items():
-    mask = lc[0,:,:] == class_code
-    for i in range(3):  # Assign RGB channels
-        rgb_image[:, :, i][mask] = color[i]
-
-plt.imshow(rgb_image, origin='upper', aspect='equal')
-plt.xticks([])
-plt.yticks([])
-#plt.savefig(f'land-cover-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
-plt.show()
+if visualize == True:
+    rgb_image = create_rgb_color_array(
+        array=lc[0,:,:,], rgb_dict=class_color_mapping
+        )
+    
+    plt.imshow(rgb_image, origin='upper', aspect='equal')
+    plt.xticks([])
+    plt.yticks([])
+    #plt.savefig(f'land-cover-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
+    plt.show()
 
 
 #%% simplification of land cover classes
@@ -206,7 +305,7 @@ lc_simpler = lc.copy()
 # new codes for agriculture - 1
 lc_simpler[lc_simpler==10] = 1
 lc_simpler[lc_simpler==11] = 1  #herbaceous cropland
-#lc_simpler[lc_simpler==12] = 10  #tree crops might need different treatment
+lc_simpler[lc_simpler==12] = 1  #tree crops might need different treatment
 lc_simpler[lc_simpler==20] = 1
 lc_simpler[lc_simpler==30] = 1
 
@@ -234,12 +333,12 @@ lc_simpler[lc_simpler==122] = 3
 lc_simpler[lc_simpler==110] = 4
 lc_simpler[lc_simpler==130] = 4
 
-# new code for sparse areas - 5
-lc_simpler[lc_simpler==140] = 5  #mosses/lichens
-lc_simpler[lc_simpler==150] = 5
-lc_simpler[lc_simpler==151] = 5
-lc_simpler[lc_simpler==152] = 5
-lc_simpler[lc_simpler==153] = 5
+# new code for sparse areas - 5 / NOT PRACTICAL
+lc_simpler[lc_simpler==140] = 4  #mosses/lichens
+lc_simpler[lc_simpler==150] = 7
+lc_simpler[lc_simpler==151] = 7
+lc_simpler[lc_simpler==152] = 7
+lc_simpler[lc_simpler==153] = 7
 
 # new code for flooded/water areas - 6
 lc_simpler[lc_simpler==160] = 6
@@ -267,7 +366,7 @@ class_rgb_mapping_simpler  = {
     12: (255, 200, 100),  #Cropland, trees
     2: (0, 100, 0),       #Tree cover
     3: (150, 100, 0),     #Shrubland
-    4: (0, 150, 0),       #Grassland/herbaceous
+    4: (255, 165, 50),       #Grassland/herbaceous
     5: (255, 235, 175),   #Sparse vegetation 
     6: (0, 70, 200),      #Water/flooded bodies 
     7: (255, 245, 215),   #Bare areas  
@@ -280,31 +379,32 @@ class_naming_simpler  = {
     # make colorings for 11,12,61,122,153,201
     
     0: "No Data ",
-    1: "Cropland",
+    1: "Agricultural",
     12: "Cropland, trees",
     2: "Tree cover",
     3: "Shrubland",
     4: "Grassland/herbaceous",
     5:" Sparse vegetation" ,
     6: "Water/flooded ",
-    7: "Bare areas"  ,
+    7: "Bare/sparse areas"  ,
     8: "Urban/built-up areas",
     9: "Permanent snow and ice" ,
 }
 
 
 # visualize the simplified land cover
-rgb_image_simpler  = np.zeros((lc_simpler.shape[1], lc_simpler.shape[2], 3), dtype=np.uint8)
-for class_code, color in class_rgb_mapping_simpler.items():
-    mask_simpler = lc_simpler[0,:,:] == class_code
-    for i in range(3):  # Assign RGB channels
-        rgb_image_simpler[:, :, i][mask_simpler] = color[i]
-
-plt.imshow(rgb_image_simpler, origin='upper', aspect='equal')
-plt.xticks([])
-plt.yticks([])
-#plt.savefig(f'land-cover-simpler-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
-plt.show()
+if visualize == True:
+    rgb_image_simpler  = np.zeros((lc_simpler.shape[1], lc_simpler.shape[2], 3), dtype=np.uint8)
+    for class_code, color in class_rgb_mapping_simpler.items():
+        mask_simpler = lc_simpler[0,:,:] == class_code
+        for i in range(3):  # Assign RGB channels
+            rgb_image_simpler[:, :, i][mask_simpler] = color[i]
+    
+    plt.imshow(rgb_image_simpler, origin='upper', aspect='equal')
+    plt.xticks([])
+    plt.yticks([])
+    #plt.savefig(f'land-cover-simpler-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
+    plt.show()
 
 
 lccs_simpler_dataarray = xr.DataArray(
@@ -318,54 +418,37 @@ ds["lccs_class_simpler"] = lccs_simpler_dataarray
 
 
 #%% create xarray of aggregated majority land cover classes
-latitudes = np.median(ds.lat_bounds.values, axis=1)
-longitudes = np.median(ds.lon_bounds.values, axis=1)
-
 factor = int(np.ceil(
     target_resolution / float(ds.attrs['geospatial_lat_resolution'])
     ))
 
-def find_mean_of_groups(arr, group_size=None):
-    if group_size==None:
-        group_size=2
-    # Reshape the array to group the elements into the desired size
-    # This excludes leftover elements
-    reshaped_arr = arr[:len(arr) - len(arr) % group_size].reshape(-1, group_size)
-    # Calculate the mean of each group (along axis 1)
-    mean_arr = np.mean(reshaped_arr, axis=1)
-    return mean_arr
+print(f"Aggregating land cover to {target_resolution}deg. This might take a while...")
+# make axis with size=1 detected and squeezed automatically/implicitly...
+if lc_simpler.shape[0] == 1:
+    lc_simpler = np.squeeze(lc_simpler, axis=0)
+lc_majority = find_median_of_groups(arr=lc_simpler, factor=factor)
+
+
+# visualize the coarser, majority based aggregation, land cover
+if visualize == True:
+    rgb_simpler_coarser = create_rgb_color_array(
+        array=lc_majority, rgb_dict=class_rgb_mapping_simpler
+        )
+    
+    plt.imshow(rgb_simpler_coarser, origin='upper', aspect='equal')
+    plt.xticks([])
+    plt.yticks([])
+    #plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
+    plt.show()
+
+
+#%% extract the aggregated values to an .nc file
+latitudes = np.median(ds.lat_bounds.values, axis=1)
+longitudes = np.median(ds.lon_bounds.values, axis=1)
 
 latitudes_agg = find_mean_of_groups(latitudes, group_size=factor)
 longitudes_agg = find_mean_of_groups(longitudes, group_size=factor)
 
-new_rows, new_cols = int(lc_simpler.shape[1]//factor), int(lc_simpler.shape[2]//factor)
-reshaped = lc_simpler.reshape(new_rows, factor, new_cols, factor)
-reshaped = np.transpose(reshaped, (0,2,1,3))
-reshaped_flat = reshaped.reshape(reshaped.shape[0], reshaped.shape[1], factor*factor)
-
-# maybeherea manual approach for computing mode using numpy might be
-# more useful, especially for the case i want to make the aggregation
-# not convert land to water, if water_num<factor*factor/2, but 
-# the water code is the majority in the subset
-print("Aggregating land cover through mode. This might take a while...")
-lc_majority =  mode(reshaped_flat, axis=2).mode.squeeze()
-
-
-# visualize the coarser, majority based aggregation, land cover
-rgb_image_simpler_coarser  = np.zeros((lc_majority.shape[0], lc_majority.shape[1], 3), dtype=np.uint8)
-for class_code, color in class_rgb_mapping_simpler.items():
-    mask_simpler = lc_majority[:,:] == class_code
-    for i in range(3):  # Assign RGB channels
-        rgb_image_simpler_coarser[:, :, i][mask_simpler] = color[i]
-
-plt.imshow(rgb_image_simpler_coarser, origin='upper', aspect='equal')
-plt.xticks([])
-plt.yticks([])
-#plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
-plt.show()
-
-
-#%% extract the aggregated values to an .nc file
 lc_coarse = xr.DataArray(
     lc_majority,
     dims=["latitude", "longitude"],
@@ -377,9 +460,6 @@ lc_coarse = xr.DataArray(
         }
     )
 
-
-
-
 lc_coarse_aligned = lc_coarse.interp(
     latitude=latitudes_subset,
     longitude=longitudes_subset,
@@ -389,24 +469,21 @@ lc_coarse_aligned = lc_coarse.interp(
 
 # visualize the coarser, majority based aggregation, 
 # and also aligned and croped, land cover
-lc_coarse_aligned_array = lc_coarse_aligned.values
-rgb_image_simpler_coarser_aligned  = np.zeros(
-    (lc_coarse_aligned_array.shape[0], lc_coarse_aligned_array.shape[1], 3), 
-    dtype=np.uint8
-    )
-for class_code, color in class_rgb_mapping_simpler.items():
-    mask_simpler = lc_coarse_aligned_array[:,:] == class_code
-    for i in range(3):  # Assign RGB channels
-        rgb_image_simpler_coarser_aligned[:, :, i][mask_simpler] = color[i]
-
-plt.imshow(rgb_image_simpler_coarser_aligned, origin='upper', aspect='equal')
-plt.xticks([])
-plt.yticks([])
-#plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-z-aligned.png', dpi=2000, bbox_inches="tight")
-plt.show()
+if visualize == True:
+    lc_coarse_aligned_array = lc_coarse_aligned.values
+    rgb_simpler_coarser_aligned = create_rgb_color_array(
+        array=lc_coarse_aligned_array, rgb_dict=class_rgb_mapping_simpler
+        )
+    
+    plt.imshow(rgb_simpler_coarser_aligned, origin='upper', aspect='equal')
+    plt.xticks([])
+    plt.yticks([])
+    #plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-z-aligned.png', dpi=2000, bbox_inches="tight")
+    plt.show()
 
 # make it also take the target extent as name
-lc_coarse_aligned.to_netcdf(f"outputs\land-cover-{target_resolution}deg-year{year}.nc")
+if export_to_device == True:
+    lc_coarse_aligned.to_netcdf(f"outputs\land-cover-{target_resolution}deg-year{year}.nc")
 
 print("Done.")
 
