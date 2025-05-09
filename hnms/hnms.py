@@ -13,58 +13,25 @@ import os
 import pandas as pd
 #import matplotlib.pyplot as plt
 
-time_scale = 0  #0:Monthly, 1:Daily
-parameter = 1 #0:RR, 1:TG, 2:TN, 3:TX
-station = 16606  #other options available
 
-extent = [39, 21, 36, 24]  #N-W-S-E
+station = 16606  #other options available
+extent = [41.8, 19.6, 35.8, 28.3]  #N-W-S-E
 coarse_resolution = 0.1  #degrees
 year_start = 1992
 year_end = 2022
 
-
-parameters = ["RR", "TG", "TN", "TX"]
-temporal_resolution = {
-    "Monthly":"m",
-    "Daily":"d"
-    }
-temporal_resolution = tuple(temporal_resolution.items())
-
-
-#%%find filename based on above query orders
-if time_scale == 0:
-    file = (
-        f'{parameters[parameter]}-'
-        f'{temporal_resolution[time_scale][1]}_'
-        f'1960-2022_series.csv'
-    )
-    
-    path = os.path.join(os.getcwd(), 
-                        "Homogenized", 
-                        str(temporal_resolution[time_scale][0]), 
-                        str(file))
-
-if time_scale == 1:
-    file = (
-        f'{station}_{parameters[parameter]}_'
-        f'{temporal_resolution[time_scale][1]}_h.csv'
-        )
-    
-    path = os.path.join(os.getcwd(), 
-                        "Homogenized", 
-                        str(temporal_resolution[time_scale][0]),
-                        f"{parameters[parameter]}",
-                        str(file))
+file_path = "TG-m_1960-2022_series.csv"
+station_info_path = "HNMS_Stations_Info.xlsx"
 
 
 #%% pandas
-df = pd.read_csv(path, index_col=0, parse_dates=True)
+df = pd.read_csv(file_path, index_col=0, parse_dates=True)
 
-hnms = pd.read_excel("HNMS_Stations_Info.xlsx")
+hnms = pd.read_excel(station_info_path)
 
 hnms_extent = hnms[(hnms.iloc[:,3]>=extent[1]-coarse_resolution/2) & #W
-                   (hnms.iloc[:,3]<extent[-1]-coarse_resolution/2) & #E
-                   (hnms.iloc[:,2]>extent[-2]+coarse_resolution/2) & #S
+                   (hnms.iloc[:,3]<extent[-1]+coarse_resolution/2) & #E
+                   (hnms.iloc[:,2]>extent[-2]-coarse_resolution/2) & #S
                    (hnms.iloc[:,2]<=extent[0]+coarse_resolution/2)   #N
                    ]
 
@@ -122,7 +89,7 @@ os.makedirs(subfolder_Path, exist_ok=True)
 
 
 df_extent_File = (
-    f'{parameters[parameter]}-{temporal_resolution[0][1]}__'
+    f'TG-m__'
     f'{extent_string}__'
     f'Period{year_start}-{year_end}'
     f'.csv'

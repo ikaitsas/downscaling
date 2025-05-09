@@ -4,19 +4,14 @@ Created on Wed Jan 30 13:03:12 2025
 
 @author: yiann
 """
-
-#True to train - else it imports a model
-train_model = True  
-
-#True to optimize - else uses fixed hyperparameters
-optimize_model = True  
-
-model_imported = 'bestMhxanaki_ExtraTreesRegressor_RandomCV6.pkl'
-
-#True for mapping - else no mapping
-visualize = False 
-
 downscaling_year = 2017 
+
+n_total_iters = 500
+n_per_chunk = 100
+
+checkpoint_path = "bayes_checkpoint.pkl"
+best_models = []
+best_scores = []
 
 
 #%% importations
@@ -26,7 +21,6 @@ import os
 import time
 import numpy as np
 import pandas as pd
-import xarray as xr
 
 os.environ['KERAS_BACKEND'] = 'tensorflow'
 #import keras  #needed for NNs
@@ -36,16 +30,28 @@ from sklearn.model_selection import train_test_split
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import RandomizedSearchCV
+
 from skopt import BayesSearchCV
 from skopt.space import Integer, Real, Categorical
+
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
+from sklearn.metrics import make_scorer
 import joblib
 
-import cartopy.crs as ccrs
-import matplotlib.pyplot as plt
-import cartopy.feature as cfeature
-import matplotlib.ticker as mticker
+from skopt.callbacks import CheckpointSaver
+from skopt import dump, load
+
+
+def safe_mse(y_true, y_pred):
+    # Some parameter combinations may retur NaN y_pred values?
+    # This error function allows the optimization to run
+    # despite the occasional production of those NaNs, so that
+    # an especially long optimization process continues running
+    # and completes robustly
+    if np.any(np.isnan(y_pred)):
+        return 9999
+    return mean_squared_error(y_true, y_pred)
 
 
 print('Importing Data...')
@@ -58,15 +64,9 @@ dfLD = dfLD[dfLD.valid_year<downscaling_year]
 dfLD = dfLD.drop(columns=["valid_year"])
 #dfHD = dfHD.drop(columns=["valid_year"])
 
-#dfLD = dfLD.drop(columns=["aspect"])
-#dfHD = dfHD.drop(columns=["aspect"])
-
-#dfLD = dfLD.drop(columns=["slope"])
-#dfHD = dfHD.drop(columns=["slope"])
 
 if np.nanmean(dfLD.t2m)>200:
     dfLD["t2m"] = dfLD.t2m - 273.15
-
 
 
 #%% train/test split, import or train/optimize model
@@ -81,63 +81,126 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42)
 
 
-#%% opt
-# model gets trained
-if optimize_model == True:
-        
+
+#%% optimization parameters gets setup  
+model = ExtraTreesRegressor(random_state=42)
+print(f'\nModel Used: {type(model).__name__}')
+print('Setting up search space, CV, scorer...')
+
+search_space = {
+    "n_estimators": Integer(6, 200),  
+    "max_depth": Categorical([None] + list(range(4, 34, 4))),  
+    "min_samples_split": Integer(2, 20),  
+    "min_samples_leaf": Integer(1, 30),  
+    "max_features": Categorical(
+        ['sqrt', 'log2', None] + list(
+            np.round(np.arange(0.2,1.1,0.1),2)
+            )
+        ),  
+    "bootstrap": Categorical([True, False])  
+}
+
+kfold = KFold(n_splits=10, shuffle=False, random_state=None)
+
+scorer = make_scorer(safe_mse, greater_is_better=False)
+
+
+#%% optimization loop
+print("Performing BayesSearchCV...")
+if os.path.exists(checkpoint_path):
+    print("Resuming from checkpoint...")
+    bayes_search = load(checkpoint_path)
+    completed_iters = len(bayes_search.cv_results_['params'])
+else:
+    completed_iters = 0
+
+
+os.makedirs("optimization-stuff", exist_ok=True)
+
+
+# Chunked loop
+while completed_iters < n_total_iters:
+    remaining = n_total_iters - completed_iters
+    run_now = min(n_per_chunk, remaining)
+    print(f"Running {run_now} more iterations...")
+
     model = ExtraTreesRegressor(random_state=42)
-    print(f'\nModel Used: {type(model).__name__}')
-    print('Starting Hyperparameter Optimization...')
-    time_start = time.time()
-    
-    search_space = {
-        "n_estimators": Integer(5, 250),  
-        "max_depth": Categorical([None] + list(range(2, 35, 4))),  
-        "min_samples_split": Integer(2, 20),  
-        "min_samples_leaf": Integer(1, 30),  
-        "max_features": Categorical(
-            ['sqrt', 'log2', None] + list(
-                np.round(np.arange(0.1,1.1,0.1),2)
-                )
-            ),  
-        "bootstrap": Categorical([True, False])  
-    }
-    
-    
-    # might add a custom CV folding, for better representation
-    # of time series data consistency?
-    # for this reason, shuffling should be avoided...
-    kfold = KFold(n_splits=10, shuffle=False, random_state=None)
-    
-    print("Performing BayesSearchCV...")
     bayes_search = BayesSearchCV(
         model,
         search_space,
-        n_iter=750,  
-        cv=kfold,  
-        scoring="neg_mean_squared_error",
-        n_jobs=1,  # -1 for all CPU cores
+        n_iter=run_now,
+        cv=kfold,
+        scoring=scorer,
+        n_jobs=1,
         verbose=3,
-        random_state=42
+        random_state=42,
+        refit=True
     )
-    # verbose only works for n_jobs=1 (others might work on linux?)
-    # will probably add a logging setup to track progress
+
+    checkpoint_cb = CheckpointSaver(checkpoint_path, compress=True, store_objective=False)
+    bayes_search.fit(X_train, y_train, callback=[checkpoint_cb])
+
+    # Save best model of this chunk
+    chunk_best_path = os.path.join(
+        "optimization-stuff", f"best_model_iter_{completed_iters+run_now}.pkl"
+        )
+    joblib.dump(bayes_search.best_estimator_, chunk_best_path)
+    best_models.append(
+        (bayes_search.best_score_, 
+         bayes_search.best_params_,
+         bayes_search.best_estimator_
+         )
+        )
+    best_scores.append(bayes_search.best_score_)
     
-    bayes_search.fit(X_train, y_train)
+    output_text_path = os.path.join(
+        "optimization-stuff", f"text_best_model_iter_{completed_iters+run_now}.txt"
+        )
+    with open(output_text_path, "a") as f:
+        f.write(f"Iteration {completed_iters+run_now}\n")
+        f.write(f"Score: {bayes_search.best_score_}\n")
+        f.write(f"Params: {bayes_search.best_params_}\n")
+        f.write(f"Params: {bayes_search.best_estimator_}\n\n\n")
     
-    time_end = time.time()
-    print(f"Hyperparameter Optimization Runtime: {time_end-time_start:.2f} s")
+    completed_iters += run_now
+    print(f"\nCompleted: {completed_iters}/{n_total_iters}\n")
     
-    print("\nBest parameters found by BayesSearchCV:")
-    print(bayes_search.best_params_)
-    print("\nBest cross-validated score (negative MSE):")
-    print(bayes_search.best_score_)
-    '''
-    print('\nTraining Best Model on the Whole Dataset...')
-    
-    best_model = bayes_search.best_estimator_
-    best_model.fit(X, y)
-    '''
+
+with open("best_models.txt", "w") as f:
+    for best_model in best_models:
+        f.write(str(best_model))
+        f.write("\n\n\n")
+
+
+#%% without loop
+'''
+bayes_search = BayesSearchCV(
+    model,
+    search_space,
+    n_iter=750,  
+    cv=kfold,  
+    scoring=scorer,
+    n_jobs=1,  # -1 for all CPU cores
+    verbose=3,
+    random_state=42
+)
+# verbose only works for n_jobs=1 (others might work on linux?)
+# will probably add a logging setup to track progress
+
+bayes_search.fit(X_train, y_train)
+
+
+print("\nBest parameters found by BayesSearchCV:")
+print(bayes_search.best_params_)
+print("\nBest cross-validated score (negative MSE):")
+print(bayes_search.best_score_)
+'''
+'''
+print('\nTraining Best Model on the Whole Dataset...')
+
+best_model = bayes_search.best_estimator_
+best_model.fit(X, y)
+'''
 
 #%% sxolia
 '''
