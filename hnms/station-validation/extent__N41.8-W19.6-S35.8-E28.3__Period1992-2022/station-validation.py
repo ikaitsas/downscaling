@@ -37,11 +37,12 @@ insitu = pd.read_csv("TG-m__N41.8-W19.6-S35.8-E28.3__Period1992-2022.csv",
                      index_col=0, parse_dates=True
                      )
 
-ld = xr.open_dataset("outputs_low_resolution_model-bigger.nc")
-hd = xr.open_dataset("outputs_high_resolution_model-bigger.nc")
+ld = xr.open_dataset("outputs_low_resolution_model.nc")
+hd = xr.open_dataset("outputs_high_resolution_model.nc")
 
 
-visualize = False
+visualize = True
+save_figures = True
 temporal_idx = 47
 target = (37.4067,22.7192)
 dataarrayLD = ld.t2m
@@ -515,14 +516,21 @@ if visualize == True:
             linewidth=0.5, alpha=0.65,
             zorder=10
             )
+        ax.scatter(
+            22.08, 38.17,
+            c="r", marker=7, s=7,
+            linewidth=0.5, alpha=0.65,
+            zorder=10
+            )
     
     fig.subplots_adjust(right=0.9)
     cbar_ax = fig.add_axes([0.92, 0.11, 0.04, 0.78])
     cbar = fig.colorbar(img, cax=cbar_ax)
     cbar.set_label("Temperature [°C]")
         
-    #plt.tight_layout()  
-    #plt.savefig(f"multiplot{temporal_idx}.png", dpi=1500, bbox_inches="tight")
+    #plt.tight_layout() 
+    if save_figures == True:
+        plt.savefig(f"multiplot{temporal_idx}.png", dpi=1500, bbox_inches="tight")
     plt.show() 
 
 
@@ -551,15 +559,16 @@ for i in range(len(stations)):
     
     seriesLD = idw_interpolation_across_time(
         target=station_location, dataarray=dataarrayLD
-        ).to_series()
+        ).to_series().round(decimals=2)
     
     seriesHD = idw_interpolation_across_time(
         target=station_location, dataarray=dataarrayHD
-        ).to_series()
+        ).to_series().round(decimals=2)
     
     seriesSITE = insitu.loc[
         insitu.index.isin(hd.valid_time.values), str(station_code)
         ]
+    
     
     if visualize == True:
         plt.plot(hd.valid_time.values, seriesLD, linestyle="--")
@@ -575,8 +584,64 @@ for i in range(len(stations)):
         plt.xticks(rotation=30)
         plt.ylabel("Temperature  [°C]")
         plt.grid()
-        plt.savefig(f'timeseries-{station_code}-{station_name}.png', dpi=300)
+        if save_figures == True:
+            plt.savefig(f'timeseries-{station_code}-{station_name}.png', dpi=300, bbox_inches="tight")
         plt.show()
+    
+
+    
+    if seriesLD.isna().all():
+        print("Station outside ERA5-Land grid.")
+    else:
+        print("Station inside ERA5-Land grid.")
+        slopeLD, interceptLD, r_valueLD, p_valueLD, std_errLD = linregress(
+            seriesSITE, seriesLD
+            )
+        slopeHD, interceptHD, r_valueHD, p_valueHD, std_errHD = linregress(
+            seriesSITE, seriesHD
+            )
+        if visualize == True:
+            # scatter plot per station
+            xmin = np.min([
+                seriesLD.min(), seriesHD.min(), seriesSITE.min()
+                ])
+            xmax = np.max([
+                seriesLD.max(), seriesHD.max(), seriesSITE.max()
+                ])
+            x= np.linspace(np.floor(xmin), np.ceil(xmax), 100)
+            yLD = slopeLD*x+interceptLD
+            yHD = slopeHD*x+interceptHD
+            
+                
+            plt.grid(linestyle="--", alpha=0.65)
+            plt.scatter(seriesSITE, seriesLD, s=5, alpha=0.95, marker="D")
+            plt.plot(x, yLD, c="blue", linestyle="--", alpha=0.75, linewidth=1.5)
+            plt.scatter(seriesSITE, seriesHD, s=5, alpha=0.95, marker="D")
+            plt.plot(x, yHD, c="brown", linestyle="--", alpha=0.95, linewidth=1.5)
+            plt.ylabel("Modeled Temperature  [°C]")
+            plt.xlabel("Insitu Temperature  [°C]")
+            if interceptLD<=0:
+                arithmetic_stringLD=""
+            else:
+                arithmetic_stringLD="+"
+            if interceptHD<=0:
+                arithmetic_stringHD=""
+            else:
+                arithmetic_stringHD="+"
+            plt.legend(
+                ["ERA5-Land", 
+                 f'{slopeLD:.3f}T{arithmetic_stringLD}{interceptLD:.3f}',
+                 "Downscaled", 
+                 f'{slopeHD:.3f}T{arithmetic_stringHD}{interceptHD:.3f}'],
+                fontsize=8
+                )
+            plt.plot(x, x, c="k", linestyle="--", alpha=0.75, linewidth=1.5)
+            plt.title(f"Temperature Scatter Plot - {station_name} ({station_code})")
+            plt.axis("square")
+            if save_figures == True:
+                plt.savefig(f"scatter-plot-monthly-{station_code}-{station_name}.png", dpi=500, bbox_inches="tight")
+            plt.show()
+    
     
     dfLD.loc[:,str(station_code)] = seriesLD.values
     dfHD.loc[:,str(station_code)] = seriesHD.values
@@ -672,7 +737,8 @@ if visualize == True:
     plt.ylabel('Density')
     plt.grid()
     plt.legend()
-    #plt.savefig("histogram.png", dpi=1000)
+    if save_figures == True:
+        plt.savefig("histogram.png", dpi=1000)
     plt.show()
     
     
@@ -698,17 +764,26 @@ if visualize == True:
     plt.plot(x, yHD, c="brown", linestyle="--", alpha=0.95, linewidth=1)
     plt.ylabel("Modeled Temperature  [°C]")
     plt.xlabel("Insitu Temperature  [°C]")
+    if interceptLD<=0:
+        arithmetic_stringLD=""
+    else:
+        arithmetic_stringLD="+"
+    if interceptHD<=0:
+        arithmetic_stringHD=""
+    else:
+        arithmetic_stringHD="+"
     plt.legend(
         ["ERA5-Land", 
-         f'{slopeLD:.3f}T{interceptLD:.3f}',
+         f'{slopeLD:.3f}T{arithmetic_stringLD}{interceptLD:.3f}',
          "Downscaled", 
-         f'{slopeHD:.3f}T{interceptHD:.3f}'],
+         f'{slopeHD:.3f}T{arithmetic_stringHD}{interceptHD:.3f}'],
         fontsize=8
         )
     plt.plot(x, x, c="k", linestyle="--", alpha=0.75, linewidth=1)
     plt.title("Temperature Scatter Plot")
     plt.axis("square")
-    #plt.savefig("scatter-plot-monthly.png", dpi=1000)
+    if save_figures == True:
+        plt.savefig("scatter-plot-monthly.png", dpi=500, bbox_inches="tight")
     plt.show()
 
 
@@ -733,7 +808,8 @@ if visualize == True:
     plt.title("Empirical CDF")
     plt.xlabel("Temperature  [°C]")
     plt.ylabel("Probability")
-    #plt.savefig("ecdf-temperatures.png", dpi=1000)
+    if save_figures == True:
+        plt.savefig("ecdf-temperatures.png", dpi=500)
     plt.show()
     
     
@@ -751,7 +827,8 @@ if visualize == True:
         fontsize=8.5,
         framealpha=0.3
         )
-    #plt.savefig("qq-plot.png", dpi=1000)
+    if save_figures == True:
+        plt.savefig("qq-plot.png", dpi=1000)
     plt.show()
 
 
@@ -797,6 +874,8 @@ temporal_metrics["downscaled_variance"] = df_stacked[mask].groupby(
 temporal_metrics["insitu_variance"] = df_stacked[mask].groupby(
     temporal_group_key)[["insitu"]].var()
 
+temporal_metrics.round(decimals=3).to_excel("temporal_metrics.xlsx")
+
 
 station_group_key = "station_code"
 station_metrics = df_stacked[mask].groupby([station_group_key])[
@@ -810,6 +889,8 @@ station_metrics["downscaled_variance"] = df_stacked[mask].groupby(
     station_group_key)[["downscaled"]].var()
 station_metrics["insitu_variance"] = df_stacked[mask].groupby(
     station_group_key)[["insitu"]].var()
+
+station_metrics.round(decimals=3).to_excel("station_metrics.xlsx")
 
 
 #%% Metrics Visualization
@@ -838,6 +919,9 @@ if visualize == True:
         if metric == "mbe":
             plt.ylim(top=0)
         
+        if metric == "ubrmse":
+            plt.ylim(bottom=0)
+        
         plt.show()
         
         
@@ -860,6 +944,9 @@ if visualize == True:
         
         if metric == "mbe":
             plt.ylim(top=0)
+        
+        if metric == "ubrmse":
+            plt.ylim(bottom=0)
         
         plt.show()
 

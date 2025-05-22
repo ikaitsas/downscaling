@@ -11,7 +11,7 @@ save_trained_model = False
 
 model_imported = (
     'ExtraTreesRegressor_coraviates-'
-    'latitude-longitude-dem-slope-valid_year-valid_month.pkl'
+    'latitude-longitude-dem-slope-land_cover-valid_month.pkl'
     )
 
 # this year and above apply the downscaling procedure
@@ -21,7 +21,9 @@ downscaling_year = 2017
 exclude_year = True
 
 #True for mapping - else no mapping
-visualize = True  
+visualize = True
+
+export_to_device = True
 
 
 #%% importations
@@ -31,6 +33,7 @@ import os
 import numpy as np
 import pandas as pd
 import xarray as xr
+from scipy.ndimage import generic_filter
 from skimage.transform import resize
 
 os.environ['KERAS_BACKEND'] = 'tensorflow'
@@ -48,7 +51,7 @@ import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
 from matplotlib.ticker import MultipleLocator
-
+from matplotlib.colors import ListedColormap, BoundaryNorm
 
  
 print('Importing Data...')
@@ -82,19 +85,22 @@ os.makedirs("output-nc-files", exist_ok=True)
 
 
 dsLD = xr.open_dataset("t2m.nc")
-dsLD["t2m"] = dsLD.t2m - 273.15
+if np.nanmean(dsLD.t2m)>200:
+    dsLD["t2m"] = dsLD.t2m - 273.15
 
 dsHD = xr.open_dataarray("t2mHD.nc")
 dsHD = dsHD.to_dataset(name="t2mLDonHD")
 dsHD = dsHD.sel(valid_time=dsHD.valid_time.dt.year >= downscaling_year)
-dsHD["t2mLDonHD"] = dsHD.t2mLDonHD - 273.15
+if np.nanmean(dsHD.t2mLDonHD)>200:
+    dsHD["t2mLDonHD"] = dsHD.t2mLDonHD - 273.15
 
 
 
 #%% train/test split, import or train/optimize model
 dfLD_ = dfLD_.dropna(subset=['t2m'])
 if exclude_year == True:
-    dfLD_ = dfLD_.drop(columns=["valid_year"])
+    if "valid_year" in dfLD_.columns:
+        dfLD_ = dfLD_.drop(columns=["valid_year"])
 train_cols = list(dfLD_.columns)[1:] #exclude t2m
 X = dfLD_.loc[:,train_cols]
 y = dfLD_.loc[:,'t2m']
@@ -117,18 +123,26 @@ if train_model == True:
         #min_samples_split=20, #peloponese
         #max_features=None #peloponese
     # for other areas, the model might need retuning, havent tried yet...
-    best_model = ExtraTreesRegressor(n_estimators=100, #peloponese
-                                     random_state=42, #peloponese
-                                     max_depth=18, #peloponese
-                                     min_samples_leaf=1, #peloponese
-                                     min_samples_split=20, #peloponese
-                                     max_features=None #peloponese
+    best_model = ExtraTreesRegressor(n_estimators=100, #100-pelop/100-optimalest/500-bayesian
+                                     random_state=42, #42 pantou
+                                     max_depth=32, #18-pelop/32-optimalest/24-bayesian
+                                     min_samples_leaf=1, #1-pelop/2-optimalest/2-bayesian
+                                     min_samples_split=50, #20-pelop/50-optimalest/50-bayesian
+                                     max_features=None, #None-pelop/0.9-optimalest/0.5-bayesian
+                                     bootstrap=False,
+                                     #warm_start=True
                                      )
-    # no year: 18, 19, 2, None
-    # with year: None, 1, 20, None
+    # optimalest has slightly more rtraining accuracy, and slightly lower
+    # testing accuracy
+    ### no year: 18, 19, 2, None
+    ### with year: None, 1, 20, None
     print(f'\nModel Used: {type(best_model).__name__}')
     print('Training with Fixed Hyperparameters...')
     best_model.fit(X_train, y_train)
+    
+    y_train_est = best_model.predict(X_train)
+    train_mse = mean_squared_error(y_train, y_train_est)
+    print(f"Train set MSE of the Model: {train_mse:.4f}")
     
     
 # model gets imported
@@ -137,13 +151,14 @@ else:
     model_imported_path = os.path.join("modelakia", model_imported)
     best_model = joblib.load(model_imported_path)
 
-    
+
     
 # GIA CV THELEI OLO TO SET - GIA KANONIKA TO TEST - DIORTHWSE TO
 # make predictions on hold-out set and show some stats
 y_pred = best_model.predict(X_test)
 random_mse = mean_squared_error(y_test, y_pred)
 print(f"Hold-out Test set MSE of the Model: {random_mse:.4f}")
+
 
 print('\nParameters of the Model:')
 print(best_model.get_params())
@@ -167,6 +182,61 @@ if train_model == True:
 #dfLD["t2m_pred"] = best_model.predict(dfLD.loc[:,train_cols])
 
 
+#%% evaluation of model
+y_train_df = pd.DataFrame({
+    "y_train":y_train,
+    "y_train_est":pd.Series(y_train_est, index=y_train.index)
+        }).sort_index()
+
+ymin = np.min([y_train_df.y_train_est.min(), y_train_df.y_train.min()])
+ymax = np.max([y_train_df.y_train_est.max(), y_train_df.y_train.max()])
+x= np.linspace(np.floor(ymin), np.ceil(ymax), 100)
+
+y_train_df["years"] = y_train_df.index.get_level_values("valid_time").year
+y_train_df["latitude"] = y_train_df.index.get_level_values("latitude")
+y_train_df["longitude"] = y_train_df.index.get_level_values("longitude")
+'''
+for year in np.unique(y_train_df.years):
+    print(year)
+    plt.scatter(
+        y_train_df.y_train[y_train_df.years==year], 
+        y_train_df.y_train_est[y_train_df.years==year], 
+        s=0.05, #c=y_train_df.years, cmap="tab10"
+        )
+    plt.plot(x, x, linewidth=0.5, c="k")
+    plt.ylabel("Estimated ERA5-Land Temperature [°C]")
+    plt.xlabel("ERA5-Land Temperature [°C]")
+    plt.axis("square")
+    plt.grid(alpha=0.35, linestyle="--")
+    plt.show()
+'''
+# all years together
+base_cmap = plt.cm.nipy_spectral  # or 'plasma', 'turbo', etc.
+unique_years = sorted(np.unique(y_train_df.years))
+cmap = ListedColormap(base_cmap(np.linspace(0, 1, len(unique_years))))
+norm = BoundaryNorm(boundaries=np.arange(min(unique_years), max(unique_years) + 2), ncolors=len(unique_years))
+
+plt.scatter(
+    y_train_df.y_train, 
+    y_train_df.y_train_est, 
+    s=0.05, alpha=0.75,
+    c=y_train_df.years, 
+    cmap=cmap, norm=norm
+    )
+plt.plot(x, x, linewidth=0.5, c="k")
+plt.ylabel("Estimated ERA5-Land Temperature [°C]")
+plt.xlabel("ERA5-Land Temperature [°C]")
+plt.axis("square")
+#plt.title("ERA5-Land vs predicted ERA5-Land")
+plt.grid(alpha=0.35, linestyle="--")
+#plt.minorticks_on()
+#plt.grid(which="minor", linestyle="--", alpha=0.35)
+cbar = plt.colorbar(ticks=unique_years[::3])
+cbar.set_label('Year')
+#plt.savefig("model-vs-era5land-coarse-resolution.png", dpi=300, bbox_inches="tight")
+plt.show()
+
+
 #%% fitting the imported/optimized model t o high resolution data
 print('Fitting on High Resolution Covariates...')
 # better do column selection based on train_cols??
@@ -182,7 +252,7 @@ dfHD['t2mHD'] = downscale
 # to HD dataset paizei na vgazei komple pragmata kai xwris nan replacement
 # isws xreiastei nan replacement gia thalasia merh mono
 dfHD['t2mHD'] = dfHD['t2mHD'].where(dfHD['t2m'].notna()) #vazw NaN values
-    
+
 
 #dsHD = dfHD.to_xarray()
 valid_timesHD = dfHD.index.get_level_values('valid_time').unique()
@@ -218,7 +288,7 @@ res = dfLD.loc[dfLD.valid_year>=downscaling_year,:].copy()
 res["t2m_pred"] = best_model.predict(res.loc[:,train_cols])
 res['t2m_pred'] = res['t2m_pred'].where(res['t2m'].notna())
 
-res['residual'] =  res.t2m - res.t2m_pred
+res['residual'] =  res.t2m - res.t2m_pred  #edw eisai
 res['residual'] = res['residual'].where(res['t2m'].notna())
 
 valid_times = res.index.get_level_values('valid_time').unique()
@@ -361,6 +431,37 @@ def fill_adjacent_nans_with_edges(grid):
 
     return grid
 
+# idio apotelesma me thn ftiaxtikh
+def fill_adjacent_nans(arr):
+    arr = arr.copy()
+
+    def nan_mean_filter(values):
+        center = values[len(values) // 2]
+        if np.isnan(center):
+            neighbors = np.array(values)
+            # Exclude the center value and NaNs from the mean
+            neighbors = neighbors[~np.isnan(neighbors)]
+            if len(neighbors) > 0:
+                return np.mean(neighbors)
+        return center
+
+    kernel_size = 3
+    # Apply filter iteratively to fill only adjacent NaNs
+    while True:
+        arr_before = arr.copy()
+        arr = generic_filter(arr, nan_mean_filter, size=kernel_size, mode='constant', cval=np.nan)
+        
+        if np.array_equal(np.nan_to_num(arr), np.nan_to_num(arr_before)):
+            break
+        
+    return arr
+
+def fill_adjacent_nans_across_depth(data_3d):
+    filled = data_3d.copy()
+    for i in range(data_3d.shape[0]):  # Loop over "depth" axis
+        filled[i] = fill_adjacent_nans(data_3d[i])
+    return filled
+
 
 print("Extracting High Resolution Residuals...")
 print("Using Bilinear Interpolation...")
@@ -372,6 +473,8 @@ resLD_filled = np.nan_to_num(resLD.resLD.to_numpy(), nan=0)
 # fill NaNs with the closest neighbours
 resLD_filled1 = fill_adjacent_nans_3d(resLD.resLD.to_numpy())
 resLD_filled2 = fill_adjacent_nans_with_edges(resLD.resLD.to_numpy())
+# auto dinei to idio apotelesma me thn ftiaxtikh mou...
+#resLD_filled3 = fill_adjacent_nans_across_depth(resLD.resLD.to_numpy())
 
 
 resHD = np.array([
@@ -379,31 +482,37 @@ resHD = np.array([
     for img in resLD_filled2
     ])
 
+
 resHD[np.isnan(dsHD.t2mLDonHD.values)] = np.nan
+#resHD0[np.isnan(dsHD.t2mLDonHD.values)] = np.nan
 
 resHD = xr.DataArray(resHD, dims=dsHD.dims, coords=dsHD.coords)
+#resHD0 = xr.DataArray(resHD0, dims=dsHD.dims, coords=dsHD.coords)
+
 dsHD["resHD"] = resHD
+#dsHD["resHD0"] = resHD0
 
 print("Done.")
 
 
 #%% export to device
-resLD.to_netcdf(
-    os.path.join("output-nc-files", "outputs_low_resolution_model.nc")
-    )
-dsHD.to_netcdf(
-    os.path.join("output-nc-files", "outputs_high_resolution_model.nc")
-    )
+if export_to_device == True:
+    resLD.to_netcdf(
+        os.path.join("output-nc-files", "outputs_low_resolution_model.nc")
+        )
+    dsHD.to_netcdf(
+        os.path.join("output-nc-files", "outputs_high_resolution_model.nc")
+        )
 
 
 #%% optikopoihsh
-degree_spacing = 0.1
-temporal_idx = 53
+degree_spacing = 0.2
+temporal_idx = 47
 
 if visualize == True:
     
     t2m_pred = dsHD.t2mHD 
-    t2m_res = dsHD.t2mHD + dsHD.resHD 
+    t2m_res = dsHD.t2mHD + dsHD.resHD
     t2mLD = resLD.t2m 
     t2mLD_pred = resLD.t2m_predLD
     times = dsHD.valid_time.values

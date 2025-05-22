@@ -29,16 +29,23 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 from scipy.stats import mode
+
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
 import matplotlib.pyplot as plt
 from collections import Counter
+import matplotlib.patches as mpatches
+import matplotlib.ticker as mticker
+from matplotlib.ticker import MultipleLocator
 
 
 single_year = 2022
 target_resolution = 0.1
 target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 
-export_to_device = True
-visualize = False
+export_to_device = False
+visualize = True
 
 
 #%% constants and functions
@@ -60,7 +67,7 @@ def find_mean_of_groups(arr, group_size=None):
     return mean_arr
 
 
-def find_majority(arr, exception_value=6):  # 6 for water
+def find_majority(arr, exception_value=6, exlusion_threshold=0.5): #6 for water
     N, M, K = arr.shape
     result = np.empty((N, M), dtype=arr.dtype)
     
@@ -73,7 +80,7 @@ def find_majority(arr, exception_value=6):  # 6 for water
             top_value, top_count = sorted_by_frequency_counts[0]
             top_value = int(top_value)
             top_count = int(top_count)
-            if top_value==exception_value & int((top_count/K))<=0.5:
+            if top_value==exception_value & int((top_count/K))<=exlusion_threshold:
                 # If exception_value is the mode and there’s another option, use next best
                 if len(sorted_by_frequency_counts)>1:
                     result[i, j] = sorted_by_frequency_counts[1][0]
@@ -140,6 +147,23 @@ def create_rgb_color_array(array, rgb_dict):
     else:
         raise ValueError("Input array must be 2D or 3D (time, height, width)")
     return rgb_image
+
+
+def construct_legend_from_rgb(code_dict, name_dict):
+    rgb_legend = []
+    
+    for class_id, rgb in class_rgb_mapping_simpler.items():
+        # Safely get name from naming dict (skip if not found)
+        class_name = class_naming_simpler.get(class_id)
+        if class_name is None:
+            continue
+        # Normalize RGB to [0, 1]
+        color = np.array(rgb) / 255.0
+        # Create a patch for the legend
+        patch = mpatches.Patch(color=color, label=class_name)
+        rgb_legend.append(patch)
+        
+    return rgb_legend
 
 
 #%% setting up the aggregated, aligned, cropped land cover
@@ -234,41 +258,48 @@ lc = ds.lccs_class.to_numpy()
 
 
 #%% visualization - make adjustments for choosing year
-rgb_image  = np.zeros((lc.shape[1], lc.shape[2], 3), dtype=np.uint8)
 class_color_mapping  = {
-    # make colorings for 11,12,61,122,153,201
-    
+        
     0: (0, 0, 0),           #No Data 
     10: (255, 255, 100),    #Cropland, rainfed
-    11: (255, 220, 90),    #Cropland, rainfed - 
-    12: (255, 200, 100),    #Cropland, rainfed - trees?
+    11: (255, 220, 90),     #Cropland, rainfed - herbaceous
+    12: (255, 200, 100),    #Cropland, rainfed - tree/shrub cover
 
     20: (170, 240, 240),    #Cropland, irrigated or post-flooding
     30: (220, 240, 100),    #Mosaic cropland (>50%) / natural vegetation (tree, shrub,herbaceous cover) (<50%)
     40: (200, 200, 100),    #Mosaic natural vegetation (tree, shrub, herbaceous cover) (>50%) /cropland (<50%
     50: (0, 100, 0),        #Tree cover, broadleaved, evergreen, closed to open (>15%) 
     60: (0, 160, 0),        #Tree cover, broadleaved, deciduous, closed to open (>15%)
-    61: (0, 160, 0),        #Tree cover, broadleaved, deciduous, closed to open (>15%)
+    61: (0, 160, 0),        #Tree cover, broadleaved, deciduous, closed (>15%)
+    62: (0, 160, 0),        #Tree cover, broadleaved, deciduous, open (15‐40%)
 
     70: (0, 60, 0),         #Tree cover, needleleaved, evergreen, closed to open (>15%)
+    71: (0, 60, 0),         #Tree cover, needleleaved, evergreen, closed (>40%)
+    72: (0, 60, 0),         #Tree cover, needleleaved, evergreen, open (15-40%)
     80: (40, 80, 0),        #Tree cover, needleleaved, deciduous, closed to open (>15%)
+    81: (40, 80, 0),        #Tree cover, needleleaved, deciduous, closed (>40%)
+    82: (40, 80, 0),        #Tree cover, needleleaved, deciduous, open (15-40%)
     90: (120, 130, 0),      #Tree cover, mixed leaf type (broadleaved and needleleaved)
     100: (140, 160, 0),     #Mosaic tree and shrub (>50%) / herbaceous cover (<50%) 
     110: (190, 150, 0),     #Mosaic herbaceous cover (>50%) / tree and shrub (<50%) 
     120: (150, 100, 0),     #Shrubland
-    122: (150, 100, 0),     #Shrubland - 
+    121: (150, 100, 0),     #Shrubland - evergreen
+    122: (150, 100, 0),     #Shrubland - deciduous
 
     130: (255, 180, 50),    #Grassland
     140: (255, 220, 210),   #Lichens and mosses
     150: (255, 235, 175),   #Sparse vegetation (tree, shrub, herbaceous cover) (<15%)
-    153: (255, 235, 175),   #Sparse vegetation (tree, shrub, herbaceous cover) (<15%)
+    151: (255, 235, 175),   #Sparse trees (<15%)
+    152: (255, 235, 175),   #Sparse shrub (<15%)
+    153: (255, 235, 175),   #Sparse herbaceous (<15%)
 
     160: (0, 120, 90),      #Tree cover, flooded, fresh or brackish water 
     170: (0, 150, 120),     #Tree cover, flooded, saline water 
     180: (0, 220, 130),     #Shrub or herbaceous cover, flooded, fresh/saline/brackish water 
     190: (195, 20, 0),      #Urban areas
     200: (255, 245, 215),   #Bare areas 
-    201: (255, 245, 215),   #Bare areas 
+    201: (255, 245, 215),   #Bare areas - consolidated
+    201: (255, 245, 215),   #Bare areas - unconsolidated
 
     210: (0, 70, 200),      #Water bodies 
     220: (255, 255, 255),   #Permanent snow and ice 
@@ -292,10 +323,43 @@ if visualize == True:
         array=lc[0,:,:,], rgb_dict=class_color_mapping
         )
     
-    plt.imshow(rgb_image, origin='upper', aspect='equal')
-    plt.xticks([])
-    plt.yticks([])
-    #plt.savefig(f'land-cover-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
+    dy = float(ds.attrs['geospatial_lat_resolution'])
+    dx = float(ds.attrs['geospatial_lon_resolution'])
+    extent_imshow = [
+        extent[1]-dx/2, extent[3]+dx/2, 
+        extent[2]-dy/2, extent[0]+dy/2
+        ]
+    
+    degree_spacing = 0.5
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
+    
+    #ax.add_feature(cfeature.LAKES.with_scale("50m"), 
+                   #edgecolor="black",linewidth=0.1)
+    
+    ax.imshow(
+        rgb_image,
+        origin='upper',
+        extent=extent_imshow,
+        transform=ccrs.PlateCarree()
+    )
+    
+    ax.coastlines(resolution="10m", linewidth=0.1, alpha=0.75)
+    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.1, alpha=0.75)
+    ax.add_feature(cfeature.LAND)    
+    
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.1, linestyle="--", color="gray",
+        alpha=0.75
+        )
+    gl.xlocator = MultipleLocator(degree_spacing)
+    gl.ylocator = MultipleLocator(degree_spacing)
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.top_labels = False
+    gl.right_labels = False
+    
+    plt.title(f"ESA-CCI Land Cover - {year}")
+    #plt.savefig(f'land-cover-{year}-area-subset.{extent_string}.png', dpi=2500, bbox_inches="tight")
     plt.show()
 
 
@@ -304,13 +368,13 @@ lc_simpler = lc.copy()
 
 # new codes for agriculture - 1
 lc_simpler[lc_simpler==10] = 1
-lc_simpler[lc_simpler==11] = 1  #herbaceous cropland
-lc_simpler[lc_simpler==12] = 1  #tree crops might need different treatment
+lc_simpler[lc_simpler==11] = 4  #herbaceous/vegetation matters more than use
+lc_simpler[lc_simpler==12] = 1  #trees/shrubs
 lc_simpler[lc_simpler==20] = 1
 lc_simpler[lc_simpler==30] = 1
+lc_simpler[lc_simpler==40] = 1
 
 # new code for forest - 2
-lc_simpler[lc_simpler==40] = 2
 lc_simpler[lc_simpler==50] = 2
 lc_simpler[lc_simpler==60] = 2
 lc_simpler[lc_simpler==61] = 2
@@ -322,6 +386,8 @@ lc_simpler[lc_simpler==80] = 2
 lc_simpler[lc_simpler==81] = 2
 lc_simpler[lc_simpler==82] = 2
 lc_simpler[lc_simpler==90] = 2
+lc_simpler[lc_simpler==160] = 2
+lc_simpler[lc_simpler==170] = 2
 
 # new code for shrubland - 3
 lc_simpler[lc_simpler==100] = 3
@@ -332,30 +398,28 @@ lc_simpler[lc_simpler==122] = 3
 # new code for herbaceous/grassland - 4
 lc_simpler[lc_simpler==110] = 4
 lc_simpler[lc_simpler==130] = 4
-
-# new code for sparse areas - 5 / NOT PRACTICAL
 lc_simpler[lc_simpler==140] = 4  #mosses/lichens
-lc_simpler[lc_simpler==150] = 7
-lc_simpler[lc_simpler==151] = 7
-lc_simpler[lc_simpler==152] = 7
-lc_simpler[lc_simpler==153] = 7
 
-# new code for flooded/water areas - 6
-lc_simpler[lc_simpler==160] = 6
-lc_simpler[lc_simpler==170] = 6
-lc_simpler[lc_simpler==180] = 6
+# new code for sparse/bare areas - 5
+lc_simpler[lc_simpler==150] = 5
+lc_simpler[lc_simpler==151] = 5
+lc_simpler[lc_simpler==152] = 5
+lc_simpler[lc_simpler==153] = 5
+lc_simpler[lc_simpler==200] = 5
+lc_simpler[lc_simpler==201] = 5
+lc_simpler[lc_simpler==202] = 5
+
+# new code for water bodies - 6
 lc_simpler[lc_simpler==210] = 6
 
-# new code for bare areas - 7
-lc_simpler[lc_simpler==200] = 7
-lc_simpler[lc_simpler==201] = 7
-lc_simpler[lc_simpler==202] = 7
+# new code for urban/built up areas - 7
+lc_simpler[lc_simpler==190] = 7
 
-# new code for urban/built up areas - 8
-lc_simpler[lc_simpler==190] = 8
+# new code for snow/ice areas - 8
+lc_simpler[lc_simpler==220] = 8
 
-# new code for snow/ice areas - 9
-lc_simpler[lc_simpler==220] = 9
+# new code for wetland/flooded areas - 9
+lc_simpler[lc_simpler==180] = 3  #merged with shrub for mediterranean
 
 
 class_rgb_mapping_simpler  = {
@@ -363,15 +427,15 @@ class_rgb_mapping_simpler  = {
     
     0: (0, 0, 0),         #No Data 
     1: (255, 255, 100),   #Cropland
-    12: (255, 200, 100),  #Cropland, trees
+    12: (255, 200, 100),  #Cropland, trees / NOT USED
     2: (0, 100, 0),       #Tree cover
     3: (150, 100, 0),     #Shrubland
-    4: (255, 165, 50),       #Grassland/herbaceous
-    5: (255, 235, 175),   #Sparse vegetation 
-    6: (0, 70, 200),      #Water/flooded bodies 
-    7: (255, 245, 215),   #Bare areas  
-    8: (195, 20, 0),      #Urban areas
-    9: (255, 255, 255),   #Permanent snow and ice 
+    4: (255, 165, 50),    #Grassland/herbaceous
+    5: (255, 235, 175),   #Sparse vegetation/Bare areas 
+    6: (0, 70, 200),      #Water bodies 
+    7: (195, 20, 0),      #Urban/built-up areas
+    8: (255, 255, 255),   #Permanent snow and ice  
+    9: (0, 220, 130),     #Wetlands/flooded areas 
     
 }
 
@@ -384,26 +448,71 @@ class_naming_simpler  = {
     2: "Tree cover",
     3: "Shrubland",
     4: "Grassland/herbaceous",
-    5:" Sparse vegetation" ,
-    6: "Water/flooded ",
-    7: "Bare/sparse areas"  ,
-    8: "Urban/built-up areas",
-    9: "Permanent snow and ice" ,
+    5:" Sparse cover/bare areas" ,
+    6: "Water bodies",
+    7: "Urban/built-up areas",
+    8: "Permanent snow/ice"  ,
+    9: "Wetlands/flooded areas" ,
 }
+
+
+legend_handles_simpler = construct_legend_from_rgb(
+    code_dict=class_rgb_mapping_simpler, 
+    name_dict=class_naming_simpler
+    )
 
 
 # visualize the simplified land cover
 if visualize == True:
-    rgb_image_simpler  = np.zeros((lc_simpler.shape[1], lc_simpler.shape[2], 3), dtype=np.uint8)
-    for class_code, color in class_rgb_mapping_simpler.items():
-        mask_simpler = lc_simpler[0,:,:] == class_code
-        for i in range(3):  # Assign RGB channels
-            rgb_image_simpler[:, :, i][mask_simpler] = color[i]
+    rgb_image_simpler = create_rgb_color_array(
+        array=lc_simpler[0,:,:], rgb_dict=class_rgb_mapping_simpler
+        )
     
-    plt.imshow(rgb_image_simpler, origin='upper', aspect='equal')
-    plt.xticks([])
-    plt.yticks([])
-    #plt.savefig(f'land-cover-simpler-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
+    dy = float(ds.attrs['geospatial_lat_resolution'])
+    dx = float(ds.attrs['geospatial_lon_resolution'])
+    extent_imshow = [
+        extent[1]-dx/2, extent[3]+dx/2, 
+        extent[2]-dy/2, extent[0]+dy/2
+        ]
+    
+    degree_spacing = 0.5
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
+    
+    #ax.add_feature(cfeature.LAKES.with_scale("50m"), 
+                   #edgecolor="black",linewidth=0.1)
+    
+    ax.imshow(
+        rgb_image_simpler,
+        origin='upper',
+        extent=extent_imshow,
+        transform=ccrs.PlateCarree()
+    )
+
+    ax.coastlines(resolution="10m", linewidth=0.1, alpha=0.75)
+    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25, alpha=0.75)
+    ax.add_feature(cfeature.LAND)    
+    
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.25, linestyle="--", color="gray",
+        alpha=0.5
+        )
+    gl.xlocator = MultipleLocator(degree_spacing)
+    gl.ylocator = MultipleLocator(degree_spacing)
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.top_labels = False
+    gl.right_labels = False
+    
+    plt.title(f"Merged Land Cover - {year}")
+    plt.legend(
+        handles=legend_handles_simpler,
+        loc='lower left',
+        ncol=1,
+        fontsize=4.6,
+        frameon=True,
+        framealpha=0.6
+    )
+    #plt.savefig(f'land-cover-simpler-{year}-area-subset.{extent_string}.png', dpi=2500, bbox_inches="tight")
     plt.show()
 
 
@@ -418,7 +527,7 @@ ds["lccs_class_simpler"] = lccs_simpler_dataarray
 
 
 #%% create xarray of aggregated majority land cover classes
-factor = int(np.ceil(
+factor = int(np.round(
     target_resolution / float(ds.attrs['geospatial_lat_resolution'])
     ))
 
@@ -435,13 +544,54 @@ if visualize == True:
         array=lc_majority, rgb_dict=class_rgb_mapping_simpler
         )
     
-    plt.imshow(rgb_simpler_coarser, origin='upper', aspect='equal')
-    plt.xticks([])
-    plt.yticks([])
+    dy = float(ds.attrs['geospatial_lat_resolution'])
+    dx = float(ds.attrs['geospatial_lon_resolution'])
+    extent_imshow = [
+        extent[1]-dx/2, extent[3]+dx/2, 
+        extent[2]-dy/2, extent[0]+dy/2
+        ]
+    
+    degree_spacing = 0.2
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
+    
+    #ax.add_feature(cfeature.LAKES.with_scale("50m"), 
+                   #edgecolor="black",linewidth=0.1)
+    
+    ax.imshow(
+        rgb_simpler_coarser,
+        origin='upper',
+        extent=extent_imshow,
+        transform=ccrs.PlateCarree()
+    )
+
+    ax.coastlines(resolution="10m", linewidth=0.1, alpha=0.75)
+    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25, alpha=0.75)
+    ax.add_feature(cfeature.LAND)    
+    
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.25, linestyle="--", color="gray",
+        alpha=0.5
+        )
+    gl.xlocator = MultipleLocator(degree_spacing)
+    gl.ylocator = MultipleLocator(degree_spacing)
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.top_labels = False
+    gl.right_labels = False
+    
+    plt.title(f"Merged and {target_resolution}° Aggregated Land Cover - {year}")
+    plt.legend(
+        handles=legend_handles_simpler,
+        loc='lower left',
+        ncol=1,
+        fontsize=4.6,
+        frameon=True,
+        framealpha=0.6
+    )
     #plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
     plt.show()
 
-
+'''
 #%% extract the aggregated values to an .nc file
 latitudes = np.median(ds.lat_bounds.values, axis=1)
 longitudes = np.median(ds.lon_bounds.values, axis=1)
@@ -475,10 +625,51 @@ if visualize == True:
         array=lc_coarse_aligned_array, rgb_dict=class_rgb_mapping_simpler
         )
     
-    plt.imshow(rgb_simpler_coarser_aligned, origin='upper', aspect='equal')
-    plt.xticks([])
-    plt.yticks([])
-    #plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-z-aligned.png', dpi=2000, bbox_inches="tight")
+    extent_imshow_aligned = [
+        target_extent[1]-target_resolution/2, 
+        target_extent[3]+target_resolution/2, 
+        target_extent[2]-target_resolution/2, 
+        target_extent[0]+target_resolution/2
+        ]
+    
+    degree_spacing = 0.1
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
+    
+    #ax.add_feature(cfeature.LAKES.with_scale("50m"), 
+                   #edgecolor="black")
+    
+    ax.imshow(
+        rgb_simpler_coarser_aligned,
+        origin='upper',
+        extent=extent_imshow_aligned,
+        transform=ccrs.PlateCarree()
+    )
+
+    ax.coastlines(resolution="10m", linewidth=0.1)
+    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25)
+    ax.add_feature(cfeature.LAND)    
+    
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.2, linestyle="--", color="gray",
+        alpha=0.5
+        )
+    gl.xlocator = MultipleLocator(degree_spacing)
+    gl.ylocator = MultipleLocator(degree_spacing)
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.top_labels = False
+    gl.right_labels = False
+    
+    plt.title(f"Merged and {target_resolution}° Aggregated Land Cover - {year}")
+    plt.legend(
+        handles=legend_handles_simpler,
+        loc='lower left',
+        ncol=1,
+        fontsize=4.6,
+        frameon=True,
+        framealpha=0.6
+    )
+    #plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-z-aligned.png', dpi=1500, bbox_inches="tight")
     plt.show()
 
 # make it also take the target extent as name
@@ -486,7 +677,7 @@ if export_to_device == True:
     lc_coarse_aligned.to_netcdf(f"outputs\land-cover-{target_resolution}deg-year{year}.nc")
 
 print("Done.")
-
+'''
 '''
 # this approach uses numpy to compute mode, and will be much
 # faster once done, scipy.stats.mode is very slow for some reason...
@@ -502,5 +693,57 @@ factor = 4
 lc_coarse = ds.lccs_class_simpler.coarsen(lat=factor, lon=factor, boundary='trim').sum()
 '''
 
+#%% crop the desired area first, then aggregate
+
+# one solution would be to interpolate into a grid that has an inyeger 
+# ratio with target_resolution?
+# like, interpolating the original 0.0027778 resolution grid to a 0.0025
+# resolution one, using nearest neighbor?
+# woould that make alignment easier? i must check...
+factor_non_rounded = (
+    target_resolution / float(ds.attrs['geospatial_lat_resolution'])
+    )
+
+factor = int(np.round(
+    target_resolution / float(ds.attrs['geospatial_lat_resolution'])
+    ))
+
+print(f"Aggregating land cover to {target_resolution}deg. This might take a while...")
+
+ds_target = ds.sel(lat=slice(target_extent[0]+target_resolution/2, target_extent[2]-target_resolution/2))
+ds_target = ds_target.sel(lon=slice(target_extent[1]-target_resolution/2, target_extent[3]+target_resolution/2))
+
+lc_=ds_target.lccs_class_simpler
+
+latitudes = np.median(ds_target.lat_bounds.values, axis=1)
+longitudes = np.median(ds_target.lon_bounds.values, axis=1)
+
+latitudes_agg = find_mean_of_groups(latitudes, group_size=factor)
+longitudes_agg = find_mean_of_groups(longitudes, group_size=factor)
+
+resolution_ = abs(np.mean(np.diff(latitudes_agg)))
+
+if lc_.shape[0] == 1:
+    lc_ = np.squeeze(lc_, axis=0)
+lc_agg = find_median_of_groups(arr=lc_.values, factor=factor)
 
 
+lc_coarse = xr.DataArray(
+    lc_agg,
+    dims=["latitude", "longitude"],
+    coords={"latitude": latitudes_agg, "longitude": longitudes_agg},
+    name="lc_coarse",
+    attrs={
+        "rgb_code":str(class_rgb_mapping_simpler),
+        "class_name":str(class_naming_simpler),
+        }
+    )
+
+if np.isclose(resolution_, target_resolution, rtol=1e-3):
+    print("aggregated grid matches target grid")
+else:
+    print("aggregated grid does not match target grid")
+    print("due to rounding of the upscaling factor")
+    print(f"ratio: {factor_non_rounded:.3f}")
+    print(f"factor: {factor:.0f}")
+    

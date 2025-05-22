@@ -18,3 +18,4 @@ land-cover-classification/data
 *.csv
 *.out
 *.txt
+*.xlsx

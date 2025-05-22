@@ -23,6 +23,7 @@ import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
+from matplotlib.ticker import MultipleLocator
 
 
 extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
@@ -30,7 +31,7 @@ years = list(range(1992,2023))
 timescale = 'monthly'
 visualize = True
 save_to_device = True
-extract_nn_training_data = False
+extract_nn_training_data = False  #keep false!
 
 downscaling_year_start = 2017
 
@@ -39,8 +40,8 @@ downscaling_year_start = 2017
 dem = xr.open_dataset("output-morphography-0.1deg.nc")
 demHD = xr.open_dataset("output-morphography-0.01deg.nc")
 
-lc = xr.open_dataarray("land-cover-0.1deg-bigger.nc")
-lcHD = xr.open_dataarray("land-cover-0.01deg-bigger.nc")
+lc = xr.open_dataarray("land-cover-0.1deg-bigger--2.nc")
+lcHD = xr.open_dataarray("land-cover-0.01deg-bigger--2.nc")
 
 
 
@@ -301,7 +302,146 @@ if save_to_device == True:
     t2mHD.to_netcdf("t2mHD.nc")
 
 
+#%%
+valid_time_index = 341
+degree_spacing = 0.5
+
+
+if visualize == True:
+    t2m = ds.t2m - 273.15
+    print('Mapping...')
+
+    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
+    
+    ax.add_feature(cfeature.LAKES.with_scale("50m"), 
+                   edgecolor="black")
+    
+    #try the following with plt.pcolormesh() too
+    #it just needs longitude, latitude, 2d-array
+    #xr.plot assumes the center of the grid cell
+    #plt.imshow assumes the top-left corner
+    t2m.isel(valid_time=valid_time_index).plot(
+        ax=ax, 
+        transform=ccrs.PlateCarree(), 
+        cmap=plt.cm.inferno, 
+        cbar_kwargs={"label": "Temperature [°C]"},
+        vmin=0, 
+        vmax=26
+    )
+    
+    ax.coastlines(resolution="10m", linewidth=0.35)
+    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25)
+    ax.add_feature(cfeature.LAND)
+    
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.25, linestyle="--", color="gray"
+        )
+    gl.xlocator = MultipleLocator(degree_spacing)
+    gl.ylocator = MultipleLocator(degree_spacing)
+    gl.top_labels = False
+    gl.right_labels = False
+    gl.top_labels = False
+    gl.right_labels = False
+    #gl.xlabel_values = ds.longitude.values[::5]
+    #gl.ylabel_values = ds.latitude.values[::5]
+    '''
+    gl.xformatter = mticker.FuncFormatter(
+        lambda x, _: f"{x:.1f}" if x in ds.longitude.values[::5] else ""
+        )
+    gl.yformatter = mticker.FuncFormatter(
+        lambda y, _: f"{y:.1f}" if y in ds.latitude.values[::5] else ""
+        )
+    '''
+    timestamp_string = f"{np.datetime_as_string(ds.valid_time.values[valid_time_index], unit='M')}"
+    ax.set_title(f"ERA5-Land 2m-Air Temperature - {timestamp_string}")
+    #ax.set_title('Tem')
+    #plt.savefig('images-maps\\t2m-era5-land-{timestamp_string}.png', dpi=500, bbox_inches="tight")
+    plt.show()
+    
+    #t2m = None
+
+
+print('Done')
+
+
+#%% multiplot
+valid_time_index = 341
+degree_spacing = 0.5
+
+if visualize == True:
+    t2m = ds.t2m - 273.15
+    print('Mapping2...')
+
+    # order: t2mLD, t2mLD_pred, t2m_pred, t2m_res
+    # dont change the order of the above
+    # or change it everywhere the same below!
+    timestamp_string1 = f"{np.datetime_as_string(ds.valid_time.values[valid_time_index], unit='M')}"
+    timestamp_string2 = f"{np.datetime_as_string(ds.valid_time.values[valid_time_index+6], unit='M')}"
+    titles = [
+        f"ERA5-Land 2m-Air Temperature - {timestamp_string1}",
+        f"ERA5-Land 2m-Air Temperature - {timestamp_string2}"
+        ]
+    
+    mins = [
+        np.nanmin(t2m.values[valid_time_index,:,:]),
+        np.nanmin(t2m.values[valid_time_index+6,:,:]),
+        ]
+    maxes = [
+        np.nanmax(t2m.values[valid_time_index,:,:]),
+        np.nanmax(t2m.values[valid_time_index+6,:,:]),
+        ]
+    
+    fig, axes = plt.subplots(
+        2, 1,  #rows, columns
+        figsize=(7, 10), 
+        subplot_kw={'projection': ccrs.PlateCarree()}
+        )
+    
+    vmin = np.floor( np.min(mins) )
+    vmax = np.ceil( np.max(maxes) )
+    
+    for ax, da, title in zip(
+            axes.flat, 
+            [t2m[valid_time_index,:,:],t2m[valid_time_index+6,:,:]], 
+            titles
+            ):
+        
+        img = da.plot.pcolormesh(
+            ax=ax, cmap='inferno', transform=ccrs.PlateCarree(),
+            vmin=vmin, vmax=vmax, add_colorbar=False
+            )
+
+        ax.coastlines(resolution="10m", linewidth=0.25)
+        ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25)
+        ax.add_feature(cfeature.LAND)
+        ax.set_title(title)
+        
+        gl = ax.gridlines(
+            draw_labels=True, linewidth=0.25, linestyle="--", color="gray",
+            alpha=0.5
+            )
+        gl.xlocator = MultipleLocator(degree_spacing)
+        gl.ylocator = MultipleLocator(degree_spacing)
+        gl.top_labels = False
+        gl.right_labels = False
+        
+    
+    fig.subplots_adjust(right=0.9)
+    cbar_ax = fig.add_axes([0.92, 0.11, 0.04, 0.78])
+    cbar = fig.colorbar(img, cax=cbar_ax)
+    cbar.set_label("Temperature [°C]")
+        
+    #plt.tight_layout() 
+    plt.savefig(f"images-maps\\t2m-era5-land-multiplot{valid_time_index}.png", dpi=1500, bbox_inches="tight")
+    plt.show() 
+
+
+#%% correlation between parameters
+# nvm do it on the nan-cleaned df, not here
+
+
 #%% exportation to device for NN training
+'''
 if extract_nn_training_data == True:
 # Bring data to a tensor format
 # Create a CNN channel-based feature map
@@ -362,71 +502,4 @@ if extract_nn_training_data == True:
         np.save("time-auxilliary.npy", time_aux)
     # use t2mLD, hd_aux, time_aux for neural network building
     # and training - the rest are in some chatgtp convo...
-    
-
-#%%
-valid_time_index = 11
-degree_spacing = 0.1
-
-
-if visualize == True:
-    t2m = ds.t2m - 273.15
-    print('Mapping...')
-
-    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
-    
-    ax.add_feature(cfeature.LAKES.with_scale("50m"), 
-                   edgecolor="black")
-    
-    #try the following with plt.pcolormesh() too
-    #it just needs longitude, latitude, 2d-array
-    #xr.plot assumes the center of the grid cell
-    #plt.imshow assumes the top-left corner
-    t2m.isel(valid_time=valid_time_index).plot(
-        ax=ax, 
-        transform=ccrs.PlateCarree(), 
-        cmap=plt.cm.inferno, 
-        cbar_kwargs={"label": "Temperature (°C)"},
-        #vmin=-1, vmax=360
-    )
-    
-    ax.coastlines(resolution="10m", linewidth=0.35)
-    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25)
-    ax.add_feature(cfeature.LAND)
-    
-    gl = ax.gridlines(draw_labels=True, linestyle="--", 
-                      linewidth=0.25, color="gray",
-                      xlocs=np.arange(
-                          ds.longitude.values.min(), 
-                          ds.longitude.values.max(), 
-                          4*degree_spacing
-                          ),  #or: mticker.FixedLocator
-                      ylocs=np.arange(
-                          ds.latitude.values.max(), 
-                          ds.latitude.values.min(), 
-                          -4*degree_spacing
-                          ) 
-                      )
-    gl.top_labels = False
-    gl.right_labels = False
-    #gl.xlabel_values = ds.longitude.values[::5]
-    #gl.ylabel_values = ds.latitude.values[::5]
-    '''
-    gl.xformatter = mticker.FuncFormatter(
-        lambda x, _: f"{x:.1f}" if x in ds.longitude.values[::5] else ""
-        )
-    gl.yformatter = mticker.FuncFormatter(
-        lambda y, _: f"{y:.1f}" if y in ds.latitude.values[::5] else ""
-        )
-    '''
-    ax.set_title(f"Temperature {np.datetime_as_string(ds.valid_time.values[valid_time_index], unit='M')}")
-    #ax.set_title('Tem')
-    #plt.savefig('images-maps\\t2m-era5-land-cartopy-almost-whole-agean.png', dpi=2000, bbox_inches="tight")
-    plt.show()
-    
-    #t2m = None
-
-
-print('Done')
-
-
+'''

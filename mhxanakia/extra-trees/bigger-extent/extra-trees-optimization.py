@@ -49,7 +49,12 @@ def safe_mse(y_true, y_pred):
     # despite the occasional production of those NaNs, so that
     # an especially long optimization process continues running
     # and completes robustly
-    if np.any(np.isnan(y_pred)):
+    # ideally track y_pred values, cause these extreme min/max
+    # values might cause the hyperparameter optimization 
+    # process to crash...
+    if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)):
+        return 9999  # very bad score
+    if np.any((y_pred < -500) | (y_pred > 500)):  # overflow or unreasonable values
         return 9999
     return mean_squared_error(y_true, y_pred)
 
@@ -88,16 +93,15 @@ print(f'\nModel Used: {type(model).__name__}')
 print('Setting up search space, CV, scorer...')
 
 search_space = {
-    "n_estimators": Integer(6, 200),  
-    "max_depth": Categorical([None] + list(range(4, 34, 4))),  
-    "min_samples_split": Integer(2, 20),  
-    "min_samples_leaf": Integer(1, 30),  
+    "n_estimators": Integer(6, 500),  
+    "max_depth": Categorical([None] + list(range(4, 64, 4))),  
+    "min_samples_split": Integer(2, 50),  
+    "min_samples_leaf": Integer(2, 100),  
     "max_features": Categorical(
         ['sqrt', 'log2', None] + list(
             np.round(np.arange(0.2,1.1,0.1),2)
             )
-        ),  
-    "bootstrap": Categorical([True, False])  
+        ) 
 }
 
 kfold = KFold(n_splits=10, shuffle=False, random_state=None)
@@ -170,6 +174,7 @@ with open("best_models.txt", "w") as f:
     for best_model in best_models:
         f.write(str(best_model))
         f.write("\n\n\n")
+
 
 
 #%% without loop
