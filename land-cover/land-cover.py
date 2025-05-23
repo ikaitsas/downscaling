@@ -29,6 +29,10 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 from scipy.stats import mode
+from scipy.ndimage import zoom
+
+import rasterio
+from rasterio.transform import from_origin
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -44,8 +48,9 @@ single_year = 2022
 target_resolution = 0.1
 target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 
-export_to_device = False
-visualize = True
+export_to_device = True
+visualize = False
+save_images = False
 
 
 #%% constants and functions
@@ -80,7 +85,7 @@ def find_majority(arr, exception_value=6, exlusion_threshold=0.5): #6 for water
             top_value, top_count = sorted_by_frequency_counts[0]
             top_value = int(top_value)
             top_count = int(top_count)
-            if top_value==exception_value & int((top_count/K))<=exlusion_threshold:
+            if top_value==exception_value & ((top_count/K)<=exlusion_threshold):
                 # If exception_value is the mode and there’s another option, use next best
                 if len(sorted_by_frequency_counts)>1:
                     result[i, j] = sorted_by_frequency_counts[1][0]
@@ -348,7 +353,7 @@ if visualize == True:
     ax.add_feature(cfeature.LAND)    
     
     gl = ax.gridlines(
-        draw_labels=True, linewidth=0.1, linestyle="--", color="gray",
+        draw_labels=True, linewidth=0.15, linestyle="--", color="gray",
         alpha=0.75
         )
     gl.xlocator = MultipleLocator(degree_spacing)
@@ -359,7 +364,9 @@ if visualize == True:
     gl.right_labels = False
     
     plt.title(f"ESA-CCI Land Cover - {year}")
-    #plt.savefig(f'land-cover-{year}-area-subset.{extent_string}.png', dpi=2500, bbox_inches="tight")
+    
+    if save_images == True:
+        plt.savefig(f'land-cover-{year}-area-subset.{extent_string}.png', dpi=2500, bbox_inches="tight")
     plt.show()
 
 
@@ -427,7 +434,7 @@ class_rgb_mapping_simpler  = {
     
     0: (0, 0, 0),         #No Data 
     1: (255, 255, 100),   #Cropland
-    12: (255, 200, 100),  #Cropland, trees / NOT USED
+    #12: (255, 200, 100),  #Cropland, trees / NOT USED
     2: (0, 100, 0),       #Tree cover
     3: (150, 100, 0),     #Shrubland
     4: (255, 165, 50),    #Grassland/herbaceous
@@ -444,7 +451,7 @@ class_naming_simpler  = {
     
     0: "No Data ",
     1: "Agricultural",
-    12: "Cropland, trees",
+    #12: "Cropland, trees",
     2: "Tree cover",
     3: "Shrubland",
     4: "Grassland/herbaceous",
@@ -512,7 +519,9 @@ if visualize == True:
         frameon=True,
         framealpha=0.6
     )
-    #plt.savefig(f'land-cover-simpler-{year}-area-subset.{extent_string}.png', dpi=2500, bbox_inches="tight")
+    
+    if save_images == True:
+        plt.savefig(f'land-cover-simpler-{year}-area-subset.{extent_string}.png', dpi=2500, bbox_inches="tight")
     plt.show()
 
 
@@ -526,81 +535,50 @@ lccs_simpler_dataarray = xr.DataArray(
 ds["lccs_class_simpler"] = lccs_simpler_dataarray
 
 
-#%% create xarray of aggregated majority land cover classes
+#%% crop the desired area first, then aggregate
+# the following can be done with rasterio too, for formally conducting
+# GIS-accurate resampling:
+    #conver to GTiff if necessary
+    #resample with rasterio.wrap.reproject
+    #wrap result in xarray (optional)
+
+# des mhpws kanw resampling kateytheian me re scipy.ndimage.resample...
+
+# one solution would be to interpolate into a grid that has an inyeger 
+# ratio with target_resolution?
+# like, interpolating the original 0.0027778 resolution grid to a 0.0025
+# resolution one, using nearest neighbor?
+# woould that make alignment easier? i must check...
+factor_non_rounded = (
+    target_resolution / float(ds.attrs['geospatial_lat_resolution'])
+    )
+
 factor = int(np.round(
     target_resolution / float(ds.attrs['geospatial_lat_resolution'])
     ))
 
 print(f"Aggregating land cover to {target_resolution}deg. This might take a while...")
-# make axis with size=1 detected and squeezed automatically/implicitly...
-if lc_simpler.shape[0] == 1:
-    lc_simpler = np.squeeze(lc_simpler, axis=0)
-lc_majority = find_median_of_groups(arr=lc_simpler, factor=factor)
 
+ds_target = ds.sel(lat=slice(target_extent[0]+target_resolution/2, target_extent[2]-target_resolution/2))
+ds_target = ds_target.sel(lon=slice(target_extent[1]-target_resolution/2, target_extent[3]+target_resolution/2))
 
-# visualize the coarser, majority based aggregation, land cover
-if visualize == True:
-    rgb_simpler_coarser = create_rgb_color_array(
-        array=lc_majority, rgb_dict=class_rgb_mapping_simpler
-        )
-    
-    dy = float(ds.attrs['geospatial_lat_resolution'])
-    dx = float(ds.attrs['geospatial_lon_resolution'])
-    extent_imshow = [
-        extent[1]-dx/2, extent[3]+dx/2, 
-        extent[2]-dy/2, extent[0]+dy/2
-        ]
-    
-    degree_spacing = 0.2
-    fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
-    
-    #ax.add_feature(cfeature.LAKES.with_scale("50m"), 
-                   #edgecolor="black",linewidth=0.1)
-    
-    ax.imshow(
-        rgb_simpler_coarser,
-        origin='upper',
-        extent=extent_imshow,
-        transform=ccrs.PlateCarree()
-    )
+lc_=ds_target.lccs_class_simpler
 
-    ax.coastlines(resolution="10m", linewidth=0.1, alpha=0.75)
-    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25, alpha=0.75)
-    ax.add_feature(cfeature.LAND)    
-    
-    gl = ax.gridlines(
-        draw_labels=True, linewidth=0.25, linestyle="--", color="gray",
-        alpha=0.5
-        )
-    gl.xlocator = MultipleLocator(degree_spacing)
-    gl.ylocator = MultipleLocator(degree_spacing)
-    gl.top_labels = False
-    gl.right_labels = False
-    gl.top_labels = False
-    gl.right_labels = False
-    
-    plt.title(f"Merged and {target_resolution}° Aggregated Land Cover - {year}")
-    plt.legend(
-        handles=legend_handles_simpler,
-        loc='lower left',
-        ncol=1,
-        fontsize=4.6,
-        frameon=True,
-        framealpha=0.6
-    )
-    #plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-area-subset.{extent_string}.png', dpi=2000, bbox_inches="tight")
-    plt.show()
-
-'''
-#%% extract the aggregated values to an .nc file
-latitudes = np.median(ds.lat_bounds.values, axis=1)
-longitudes = np.median(ds.lon_bounds.values, axis=1)
+latitudes = np.median(ds_target.lat_bounds.values, axis=1)
+longitudes = np.median(ds_target.lon_bounds.values, axis=1)
 
 latitudes_agg = find_mean_of_groups(latitudes, group_size=factor)
 longitudes_agg = find_mean_of_groups(longitudes, group_size=factor)
 
-lc_coarse = xr.DataArray(
-    lc_majority,
+resolution_ = abs(np.mean(np.diff(latitudes_agg)))
+
+if lc_.shape[0] == 1:
+    lc_ = np.squeeze(lc_, axis=0)
+lc_agg = find_median_of_groups(arr=lc_.values, factor=factor)
+
+
+lc_coarse_aligned = xr.DataArray(
+    lc_agg,
     dims=["latitude", "longitude"],
     coords={"latitude": latitudes_agg, "longitude": longitudes_agg},
     name="lc_coarse",
@@ -610,12 +588,34 @@ lc_coarse = xr.DataArray(
         }
     )
 
-lc_coarse_aligned = lc_coarse.interp(
-    latitude=latitudes_subset,
-    longitude=longitudes_subset,
-    method="nearest"
-    )
+if np.isclose(resolution_, target_resolution, rtol=1e-3):
+    print("aggregated grid matches target grid")
+else:
+    print("aggregated grid does not match target grid")
+    print("due to rounding of the upscaling factor")
+    print(f"ratio: {factor_non_rounded:.3f}")
+    print(f"factor: {factor:.0f}")
+    print(f"Resampling from {resolution_:.3f} to {target_resolution} target grid...")
+    
+    zoom_lat = 610 / lc_coarse_aligned.shape[0]
+    zoom_lon = 880 / lc_coarse_aligned.shape[1]
+    
+    resampled_data = zoom(lc_coarse_aligned.values, zoom=(zoom_lat, zoom_lon), order=0)
+    
+    lc_coarse_aligned = xr.DataArray(
+        resampled_data,
+        dims=["latitude", "longitude"],
+        coords={"latitude": latitudes_subset, "longitude": longitudes_subset},
+        name="lc_coarse",
+        attrs={
+            "rgb_code":str(class_rgb_mapping_simpler),
+            "class_name":str(class_naming_simpler),
+            }
+        )
 
+
+if export_to_device == True:
+    lc_coarse_aligned.to_netcdf(f"outputs\land-cover-{target_resolution}deg-year{year}.nc")
 
 # visualize the coarser, majority based aggregation, 
 # and also aligned and croped, land cover
@@ -669,81 +669,7 @@ if visualize == True:
         frameon=True,
         framealpha=0.6
     )
-    #plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-z-aligned.png', dpi=1500, bbox_inches="tight")
-    plt.show()
-
-# make it also take the target extent as name
-if export_to_device == True:
-    lc_coarse_aligned.to_netcdf(f"outputs\land-cover-{target_resolution}deg-year{year}.nc")
-
-print("Done.")
-'''
-'''
-# this approach uses numpy to compute mode, and will be much
-# faster once done, scipy.stats.mode is very slow for some reason...
-def majority_numpy(x, axis=None):
-    x = np.asarray(x)
-    if axis is None:
-        # Do not flatten, keep the data's original dimensions
-        axis = 0  # Typically, you want to reduce over the last axis, adjust if needed
-    values, counts = np.unique(x, return_counts=True, axis=axis)
-    return values[np.argmax(counts)]
-
-factor = 4
-lc_coarse = ds.lccs_class_simpler.coarsen(lat=factor, lon=factor, boundary='trim').sum()
-'''
-
-#%% crop the desired area first, then aggregate
-
-# one solution would be to interpolate into a grid that has an inyeger 
-# ratio with target_resolution?
-# like, interpolating the original 0.0027778 resolution grid to a 0.0025
-# resolution one, using nearest neighbor?
-# woould that make alignment easier? i must check...
-factor_non_rounded = (
-    target_resolution / float(ds.attrs['geospatial_lat_resolution'])
-    )
-
-factor = int(np.round(
-    target_resolution / float(ds.attrs['geospatial_lat_resolution'])
-    ))
-
-print(f"Aggregating land cover to {target_resolution}deg. This might take a while...")
-
-ds_target = ds.sel(lat=slice(target_extent[0]+target_resolution/2, target_extent[2]-target_resolution/2))
-ds_target = ds_target.sel(lon=slice(target_extent[1]-target_resolution/2, target_extent[3]+target_resolution/2))
-
-lc_=ds_target.lccs_class_simpler
-
-latitudes = np.median(ds_target.lat_bounds.values, axis=1)
-longitudes = np.median(ds_target.lon_bounds.values, axis=1)
-
-latitudes_agg = find_mean_of_groups(latitudes, group_size=factor)
-longitudes_agg = find_mean_of_groups(longitudes, group_size=factor)
-
-resolution_ = abs(np.mean(np.diff(latitudes_agg)))
-
-if lc_.shape[0] == 1:
-    lc_ = np.squeeze(lc_, axis=0)
-lc_agg = find_median_of_groups(arr=lc_.values, factor=factor)
-
-
-lc_coarse = xr.DataArray(
-    lc_agg,
-    dims=["latitude", "longitude"],
-    coords={"latitude": latitudes_agg, "longitude": longitudes_agg},
-    name="lc_coarse",
-    attrs={
-        "rgb_code":str(class_rgb_mapping_simpler),
-        "class_name":str(class_naming_simpler),
-        }
-    )
-
-if np.isclose(resolution_, target_resolution, rtol=1e-3):
-    print("aggregated grid matches target grid")
-else:
-    print("aggregated grid does not match target grid")
-    print("due to rounding of the upscaling factor")
-    print(f"ratio: {factor_non_rounded:.3f}")
-    print(f"factor: {factor:.0f}")
     
+    if save_images == True:
+        plt.savefig(f'land-cover-simpler-coarser{target_resolution}-{year}-with-alignement2.png', dpi=1500, bbox_inches="tight")
+    plt.show()
