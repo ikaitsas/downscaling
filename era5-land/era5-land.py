@@ -34,7 +34,7 @@ save_to_device = True
 extract_nn_training_data = False  #keep false!
 
 downscaling_year_start = 2017
-target_resolution = 0.05
+target_resolution = 0.01
 coarse_resolution = 0.1
 
 
@@ -42,8 +42,8 @@ coarse_resolution = 0.1
 dem = xr.open_dataset(f"output-morphography-{coarse_resolution}deg.nc")
 demHD = xr.open_dataset(f"output-morphography-{target_resolution}deg.nc")
 
-lc = xr.open_dataarray("land-cover-0.1deg-kai-kala-correct.nc")
-lcHD = xr.open_dataarray("land-cover-0.01deg-kai-kala-correct.nc")
+lc = xr.open_dataarray(f"land-cover-{coarse_resolution}deg.nc")
+lcHD = xr.open_dataarray(f"land-cover-{target_resolution}deg.nc")
 
 
 scaling_factor = coarse_resolution/target_resolution
@@ -88,16 +88,16 @@ ds.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 ds.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
 ds.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
-if coarse_resolution == 0.1:
-    lc = lc.astype("uint8")
-    lc = lc.rename(year='valid_year').sel(valid_year=ds['valid_year'])
-    lc = lc.assign_coords(
-        latitude=ds.latitude,
-        longitude=ds.longitude
-    ) # eliminate various float point mismatches
-    ds.coords["land_cover"] = lc
+lc = lc.astype("uint8")
+lc = lc.rename(year='valid_year').sel(valid_year=ds['valid_year'])
+lc = lc.assign_coords(
+    latitude=ds.latitude,
+    longitude=ds.longitude
+) # eliminate various float point mismatches
+ds.coords["land_cover"] = lc
+
+lc = None
     
-    lc = None
 
 '''
 # care, doing:
@@ -124,27 +124,17 @@ if "expver" in df.columns:
 
 # explicitly order the columns, important for modelling!
 t2mColumn = ds.t2m.name
-if coarse_resolution==0.1 and target_resolution==0.01:
-    column_to_keep = [t2mColumn, 
-                      ds.latitude.name, 
-                      ds.longitude.name,
-                      ds.dem.name, 
-                      ds.slope.name,
-                      ds.aspect.name,
-                      ds.land_cover.name,
-                      ds.valid_year.name,
-                      ds.valid_month.name
-                      ]
-else:
-    column_to_keep = [t2mColumn, 
-                      ds.latitude.name, 
-                      ds.longitude.name,
-                      ds.dem.name, 
-                      ds.slope.name,
-                      ds.aspect.name,
-                      ds.valid_year.name,
-                      ds.valid_month.name
-                      ]
+column_to_keep = [t2mColumn, 
+                  ds.latitude.name, 
+                  ds.longitude.name,
+                  ds.dem.name, 
+                  ds.slope.name,
+                  ds.aspect.name,
+                  ds.land_cover.name,
+                  ds.valid_year.name,
+                  ds.valid_month.name
+                  ]    
+
 
 if ("valid_time" in df.index.names) & ("valid_month" not in df.columns):
     print("f")
@@ -211,18 +201,15 @@ t2mHD.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 t2mHD.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
 t2mHD.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
-if target_resolution == 0.01:
-    lcHD = lcHD.astype("uint8")
-    lcHD = lcHD.rename(year='valid_year').sel(valid_year=t2mHD['valid_year'])
-    lcHD = lcHD.assign_coords(
-        latitude=t2mHD.latitude,
-        longitude=t2mHD.longitude
-    ) # eliminate various float point mismatches
-    t2mHD.coords["land_cover"] = lcHD
-    
-    lcHD = None
+lcHD = lcHD.astype("uint8")
+lcHD = lcHD.rename(year='valid_year').sel(valid_year=t2mHD['valid_year'])
+lcHD = lcHD.assign_coords(
+    latitude=t2mHD.latitude,
+    longitude=t2mHD.longitude
+) # eliminate various float point mismatches
+t2mHD.coords["land_cover"] = lcHD
 
-
+lcHD = None    
 
 '''
 # Keep only part for downscaling - dont use this in training

@@ -28,8 +28,10 @@ import ast
 import numpy as np
 import xarray as xr
 import pandas as pd
+
 from scipy.stats import mode
 from scipy.ndimage import zoom
+from skimage.transform import resize
 
 import rasterio
 from rasterio.transform import from_origin
@@ -50,7 +52,7 @@ target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 
 export_to_device = True
 visualize = False
-save_images = True
+save_images = False
 
 
 #%% constants and functions
@@ -95,7 +97,7 @@ def find_mean_of_groups(arr, group_size=None):
     return mean_arr
 
 
-def find_majority(arr, exception_value=6, exlusion_threshold=0.5): #6 for water
+def find_majority(arr, exception_value=5, exlusion_threshold=0.5): #6 for water
     N, M, K = arr.shape
     result = np.empty((N, M), dtype=arr.dtype)
     
@@ -119,11 +121,12 @@ def find_majority(arr, exception_value=6, exlusion_threshold=0.5): #6 for water
 
     return result
 
-
+'''
 def find_median_of_groups(arr, factor=2, height_axis=0, width_axis=1,
                           method="find_majority" #"scipy_mode" other option
                           ):
     # DEPRECATED - USE find_mode_of_groups INSTEAD
+    
     # Right now method="scipy_mode" converts grid celsl where water (class=6)
     # is the plurality (majority but ratio<0.5) to water, which is not 
     # best for land cover, as land is more than water there
@@ -144,7 +147,7 @@ def find_median_of_groups(arr, factor=2, height_axis=0, width_axis=1,
     else:
         median_arr = find_majority(reshaped_flat, exception_value=6)
     return median_arr
-
+'''
 
 def find_mode_of_groups(arr, factor=2, method="find_majority",
                         latitude_tag="lat",
@@ -473,6 +476,10 @@ if visualize == True:
 #%% simplification of land cover classes
 lc_simpler = lc.copy()
 
+# For the 0.1deg resolution aggregation, sparse might need to
+# be merged further. One possibility is the merging of grassland with
+# sparce/bare - making it "open land"
+
 # new codes for agriculture - 1
 lc_simpler[lc_simpler==10] = 1
 lc_simpler[lc_simpler==11] = 1  #herbaceous/vegetation matters more than use
@@ -506,24 +513,24 @@ lc_simpler[lc_simpler==100] = 4
 lc_simpler[lc_simpler==110] = 4
 lc_simpler[lc_simpler==130] = 4
 
-# new code for sparse/bare areas - 5
-lc_simpler[lc_simpler==140] = 5  #mosses/lichens
-lc_simpler[lc_simpler==150] = 5
-lc_simpler[lc_simpler==151] = 5
-lc_simpler[lc_simpler==152] = 5
-lc_simpler[lc_simpler==153] = 5
-lc_simpler[lc_simpler==200] = 5
-lc_simpler[lc_simpler==201] = 5
-lc_simpler[lc_simpler==202] = 5
+# new code for sparse/bare areas - 5 - MERGED WITH GRASS
+lc_simpler[lc_simpler==140] = 4  #mosses/lichens
+lc_simpler[lc_simpler==150] = 4
+lc_simpler[lc_simpler==151] = 4
+lc_simpler[lc_simpler==152] = 4
+lc_simpler[lc_simpler==153] = 4
+lc_simpler[lc_simpler==200] = 4
+lc_simpler[lc_simpler==201] = 4
+lc_simpler[lc_simpler==202] = 4
 
 # new code for water bodies - 6
-lc_simpler[lc_simpler==210] = 6
+lc_simpler[lc_simpler==210] = 5
 
 # new code for urban/built up areas - 7
-lc_simpler[lc_simpler==190] = 7
+lc_simpler[lc_simpler==190] = 6
 
 # new code for snow/ice areas - 8
-lc_simpler[lc_simpler==220] = 8
+lc_simpler[lc_simpler==220] = 7
 
 # new code for wetland/flooded areas - 9
 lc_simpler[lc_simpler==180] = 3  #merged with shrub for mediterranean
@@ -537,12 +544,12 @@ class_rgb_mapping_simpler  = {
     #12: (255, 200, 100),  #Cropland, trees / NOT USED
     2: (0, 100, 0),       #Tree cover
     3: (150, 100, 0),     #Shrubland
-    4: (255, 165, 50),    #Grassland/herbaceous
-    5: (255, 235, 175),   #Sparse vegetation/Bare areas 
-    6: (0, 70, 200),      #Water bodies 
-    7: (195, 20, 0),      #Urban/built-up areas
-    8: (255, 255, 255),   #Permanent snow and ice  
-    9: (0, 220, 130),     #Wetlands/flooded areas 
+    4: (255, 165, 50),    #Grassland/Open Land
+    #5: (255, 235, 175),   #Sparse vegetation/Bare areas - MERGED WITH grass
+    5: (0, 70, 200),      #Water bodies 
+    6: (195, 20, 0),      #Urban/built-up areas
+    7: (255, 255, 255),   #Permanent snow and ice  
+    8: (0, 220, 130),     #Wetlands/flooded areas 
     
 }
 
@@ -554,12 +561,12 @@ class_naming_simpler  = {
     #12: "Cropland, trees",
     2: "Tree cover",
     3: "Shrubland",
-    4: "Grassland/herbaceous",
-    5:" Sparse cover/bare areas" ,
-    6: "Water bodies",
-    7: "Urban/built-up areas",
-    8: "Permanent snow/ice"  ,
-    9: "Wetlands/flooded areas" ,
+    4: "Grassland/Open Land", #herbaceous",
+    #5:" Sparse cover/bare areas" ,
+    5: "Water bodies",
+    6: "Urban/built-up areas",
+    7: "Permanent snow/ice"  ,
+    8: "Wetlands/flooded areas" ,
 }
 
 
@@ -689,10 +696,11 @@ lc_agg.attrs["rgb_code"] = str(class_rgb_mapping_simpler)
 lc_agg.attrs["class_name"] = str(class_naming_simpler)
 
 
+scaling = era5_resolution/resolution_
 #if np.isclose(resolution_, target_resolution, rtol=1e-3):
-if lc_agg.shape == era5_shape:
+if (lc_agg.shape[0]==scaling*era5_shape[0]) & (lc_agg.shape[1]==scaling*era5_shape[1]):
     print("aggregated grid matches target grid")
-    print("no resampling required")
+    print("no resizing required")
     resampled_flag = "-"
     
     lc_agg_aligned = xr.DataArray(
@@ -713,15 +721,29 @@ else:
     print(f"ratio: {factor_non_rounded:.3f}")
     print(f"factor: {factor:.0f}")
     print(f"Resampling from {resolution_:.6f} to {target_resolution} target grid...")
+    print(f"From shape {lc_agg.shape} to {target_shape}...")
     resampled_flag = str(resolution_)
     
     zoom_lat = target_shape[0] / lc_agg.shape[0]
     zoom_lon = target_shape[1] / lc_agg.shape[1]
     
-    resampled_lc = zoom(lc_agg.values, zoom=(zoom_lat, zoom_lon), order=0)
+    #resampled_lc = zoom(lc_agg.values, zoom=(zoom_lat, zoom_lon), order=0)
+    # the above produces some edge case errors, due to padding after the 
+    # resultign array came slightly less than expected
+    # the proteleutaia column could be broadcast to the last column
+    # but this migh tbe fragile and hard to maintain...
+    # the skimage.transform.resize should be the best option...
+    
+    resized_lc = resize(
+        lc_agg.values,
+        (target_shape[0], target_shape[1]),
+        order=0,  # nearest neighbor
+        preserve_range=True, 
+        anti_aliasing=False
+    ).astype(lc_agg.dtype)
     
     lc_agg_aligned = xr.DataArray(
-        resampled_lc,
+        resized_lc,
         dims=["latitude", "longitude"],
         coords={"latitude": latitudes_subset, "longitude": longitudes_subset},
         name="lc_coarse",

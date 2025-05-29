@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 
 years = list(range(1992,2023))
-target_resolution = 0.1
+target_resolution = 0.01
 target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 
 file_paths = []
