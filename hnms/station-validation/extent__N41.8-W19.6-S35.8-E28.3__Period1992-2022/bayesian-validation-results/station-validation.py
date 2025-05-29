@@ -37,8 +37,8 @@ insitu = pd.read_csv("TG-m__N41.8-W19.6-S35.8-E28.3__Period1992-2022.csv",
                      index_col=0, parse_dates=True
                      )
 
-ld = xr.open_dataset("outputs_low_resolution_model-nolc.nc")
-hd = xr.open_dataset("outputs_high_resolution_model-nolc.nc")
+ld = xr.open_dataset("outputs_low_resolution_model.nc")
+hd = xr.open_dataset("outputs_high_resolution_model.nc")
 
 
 visualize = True
@@ -417,11 +417,6 @@ def ecdf(data):
     '''
     return np.sort(data), np.arange(1, len(data) + 1) / len(data)
 
-def round_sigfig(x):
-    if x == 0:
-        return 0
-    return round(x, -int(math.floor(math.log10(abs(x)))))
-
 
 #%% dokimastiko
 temp_target = idw_interpolation(
@@ -597,29 +592,14 @@ for i in range(len(stations)):
     
     if seriesLD.isna().all():
         print("Station outside ERA5-Land grid.")
-        print("\n")
     else:
         print("Station inside ERA5-Land grid.")
         slopeLD, interceptLD, r_valueLD, p_valueLD, std_errLD = linregress(
             seriesSITE, seriesLD
             )
-        print("for ERA5-Land:")
-        print(
-            linregress(
-                seriesSITE, seriesLD
-                )
-            )
         slopeHD, interceptHD, r_valueHD, p_valueHD, std_errHD = linregress(
             seriesSITE, seriesHD
             )
-        print("for ERA5-Land:")
-        print(
-            linregress(
-                seriesSITE, seriesHD
-                )
-            )
-        print("\n")
-        
         if visualize == True:
             # scatter plot per station
             xmin = np.min([
@@ -688,21 +668,9 @@ df_stacked_mask = df_stacked.loc[mask,:]
 slopeLD, interceptLD, r_valueLD, p_valueLD, std_errLD = linregress(
     df_stacked_mask.insitu, df_stacked_mask.idw
     )
-
-print("All data metrics:")
-print(
-      linregress(
-          df_stacked_mask.insitu, df_stacked_mask.idw
-          )
-      )
 slopeHD, interceptHD, r_valueHD, p_valueHD, std_errHD = linregress(
     df_stacked_mask.insitu, df_stacked_mask.downscaled
     )
-print(
-      linregress(
-          df_stacked_mask.insitu, df_stacked_mask.downscaled
-          )
-      )
 
 
 # Doing it through statsmodels - same results as scipy.linregress
@@ -865,8 +833,8 @@ if visualize == True:
 
 
 #%% Performance Metrics
-rmseLD = root_mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.idw)
-rmseHD = root_mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
+mseLD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.idw)
+mseHD = mean_squared_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
 maeLD = mean_absolute_error(df_stacked_mask.insitu, df_stacked_mask.idw)
 maeHD = mean_absolute_error(df_stacked_mask.insitu, df_stacked_mask.downscaled)
 r2LD = r2_score(df_stacked_mask.insitu, df_stacked_mask.idw)
@@ -927,7 +895,7 @@ station_metrics.round(decimals=3).to_excel("station_metrics.xlsx")
 
 #%% Metrics Visualization
 if visualize == True:
-    for metric in ["rmse", "mae", "mbe", "ubrmse"]:
+    for metric in ["mse", "mae", "mbe", "ubrmse"]:
         # Merge the 2 plots in a subplot...
         # stations.name[stations.WMO_code.isin(station_metrics.index)]
         
@@ -942,7 +910,7 @@ if visualize == True:
         plt.legend(["IDW", "Downscaled"])
         plt.xlabel("Station Code")
         
-        if metric == "rmse":
+        if metric == "mse":
             ylabel = "Error [°C²]"
         else:
             ylabel = "Error [°C]"
@@ -968,7 +936,7 @@ if visualize == True:
         plt.legend(["ERA5-Land", "Downscaled"])
         plt.xlabel("Month")
         
-        if metric == "rmse":
+        if metric == "mse":
             ylabel = "Error [°C²]"
         else:
             ylabel = "Error [°C]"

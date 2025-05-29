@@ -50,7 +50,7 @@ target_extent = [41.8, 19.6, 35.8, 28.3] #N-W-S-E
 
 export_to_device = True
 visualize = False
-save_images = False
+save_images = True
 
 
 #%% constants and functions
@@ -59,6 +59,29 @@ extent = [44, 17, 34, 32]
 years = list(range(1992,2023))
 reference_center = True
 expand_to_all_directions = True
+
+era5_upper_bound = np.round(target_extent[0] + era5_resolution/2, 4)
+era5_lower_bound = np.round(target_extent[2] - era5_resolution/2, 4)
+era5_left_bound = np.round(target_extent[1] - era5_resolution/2, 4)
+era5_right_bound = np.round(target_extent[3] + era5_resolution/2, 4)
+
+era5_shape = (
+    int(
+        (era5_upper_bound-era5_lower_bound)/era5_resolution
+        ),
+    int(
+        (era5_right_bound-era5_left_bound)/era5_resolution
+        )
+    )
+
+target_shape = (
+    int(
+        era5_shape[0]/(target_resolution/era5_resolution)
+        ),
+    int(
+        era5_shape[1]/(target_resolution/era5_resolution)
+        )
+    )
 
 
 def find_mean_of_groups(arr, group_size=None):
@@ -100,6 +123,7 @@ def find_majority(arr, exception_value=6, exlusion_threshold=0.5): #6 for water
 def find_median_of_groups(arr, factor=2, height_axis=0, width_axis=1,
                           method="find_majority" #"scipy_mode" other option
                           ):
+    # DEPRECATED - USE find_mode_of_groups INSTEAD
     # Right now method="scipy_mode" converts grid celsl where water (class=6)
     # is the plurality (majority but ratio<0.5) to water, which is not 
     # best for land cover, as land is more than water there
@@ -119,6 +143,83 @@ def find_median_of_groups(arr, factor=2, height_axis=0, width_axis=1,
         mode(reshaped_flat, axis=2).mode.squeeze()
     else:
         median_arr = find_majority(reshaped_flat, exception_value=6)
+    return median_arr
+
+
+def find_mode_of_groups(arr, factor=2, method="find_majority",
+                        latitude_tag="lat",
+                        longitude_tag="lon"
+                        ):
+    """
+    Aggregates an array by blocks of `factor` using either custom majority logic or scipy.mode.
+    Pads the array if needed to ensure divisibility.
+    Accepts either a NumPy array or xarray.DataArray (lat/lon-aware).
+    """
+    is_xarray = isinstance(arr, xr.DataArray)
+    data = arr.values if is_xarray else arr
+    original_shape = data.shape
+    pad_h = (factor - (original_shape[0] % factor)) % factor
+    pad_w = (factor - (original_shape[1] % factor)) % factor
+
+    # Pad if needed
+    if pad_h > 0 or pad_w > 0:
+        data = np.pad(
+            data,
+            ((0, pad_h), (0, pad_w)),
+            mode="edge"
+        )
+
+    # Reshape for block aggregation
+    new_rows = data.shape[0] // factor
+    new_cols = data.shape[1] // factor
+    reshaped = data.reshape(new_rows, factor, new_cols, factor)
+    reshaped = np.transpose(reshaped, (0, 2, 1, 3))
+    reshaped_flat = reshaped.reshape(new_rows, new_cols, factor * factor)
+
+    # Apply aggregation method
+    if method == "find_majority":
+        median_arr = find_majority(reshaped_flat, exception_value=6)
+    else:
+        from scipy.stats import mode
+        median_arr = mode(reshaped_flat, axis=2).mode.squeeze()
+
+    # If input was xarray, reconstruct with approximate coordinates
+    if is_xarray:
+        lat = arr.coords[str(latitude_tag)].values
+        lon = arr.coords[str(longitude_tag)].values
+
+        lat_res = np.abs(lat[1] - lat[0])
+        lon_res = np.abs(lon[1] - lon[0])
+
+        pad_lat = (factor - (len(lat) % factor)) % factor
+        pad_lon = (factor - (len(lon) % factor)) % factor
+
+        if pad_lat > 0:
+            if lat[0] > lat[-1]:  # descending
+                extra_lats = lat[-1] - lat_res * np.arange(1, pad_lat + 1)
+            else:
+                extra_lats = lat[-1] + lat_res * np.arange(1, pad_lat + 1)
+            lat = np.concatenate([lat, extra_lats])
+
+        if pad_lon > 0:
+            extra_lons = lon[-1] + lon_res * np.arange(1, pad_lon + 1)
+            lon = np.concatenate([lon, extra_lons])
+
+        new_lat = lat.reshape(-1, factor).mean(axis=1)
+        new_lon = lon.reshape(-1, factor).mean(axis=1)
+        
+        
+
+        return xr.DataArray(
+            median_arr,
+            dims=["latitude", "longitude"],
+            coords={
+                "latitude": new_lat,
+                "longitude": new_lon
+            },
+            name=arr.name if arr.name else "aggregated"
+        )
+
     return median_arr
 
 
@@ -353,8 +454,7 @@ if visualize == True:
     ax.add_feature(cfeature.LAND)    
     
     gl = ax.gridlines(
-        draw_labels=True, linewidth=0.15, linestyle="--", color="gray",
-        alpha=0.75
+        draw_labels=True, linewidth=0.15, linestyle="--", color="gray"
         )
     gl.xlocator = MultipleLocator(degree_spacing)
     gl.ylocator = MultipleLocator(degree_spacing)
@@ -375,7 +475,7 @@ lc_simpler = lc.copy()
 
 # new codes for agriculture - 1
 lc_simpler[lc_simpler==10] = 1
-lc_simpler[lc_simpler==11] = 4  #herbaceous/vegetation matters more than use
+lc_simpler[lc_simpler==11] = 1  #herbaceous/vegetation matters more than use
 lc_simpler[lc_simpler==12] = 1  #trees/shrubs
 lc_simpler[lc_simpler==20] = 1
 lc_simpler[lc_simpler==30] = 1
@@ -397,17 +497,17 @@ lc_simpler[lc_simpler==160] = 2
 lc_simpler[lc_simpler==170] = 2
 
 # new code for shrubland - 3
-lc_simpler[lc_simpler==100] = 3
 lc_simpler[lc_simpler==120] = 3
 lc_simpler[lc_simpler==121] = 3
 lc_simpler[lc_simpler==122] = 3
 
 # new code for herbaceous/grassland - 4
+lc_simpler[lc_simpler==100] = 4
 lc_simpler[lc_simpler==110] = 4
 lc_simpler[lc_simpler==130] = 4
-lc_simpler[lc_simpler==140] = 4  #mosses/lichens
 
 # new code for sparse/bare areas - 5
+lc_simpler[lc_simpler==140] = 5  #mosses/lichens
 lc_simpler[lc_simpler==150] = 5
 lc_simpler[lc_simpler==151] = 5
 lc_simpler[lc_simpler==152] = 5
@@ -559,55 +659,75 @@ factor = int(np.round(
 
 print(f"Aggregating land cover to {target_resolution}deg. This might take a while...")
 
-ds_target = ds.sel(lat=slice(target_extent[0]+target_resolution/2, target_extent[2]-target_resolution/2))
-ds_target = ds_target.sel(lon=slice(target_extent[1]-target_resolution/2, target_extent[3]+target_resolution/2))
+ds_target = ds.sel(
+    lat=slice(
+        target_extent[0]+era5_resolution/2, 
+        target_extent[2]-era5_resolution/2
+        )
+    )
+ds_target = ds_target.sel(
+    lon=slice(
+        target_extent[1]-era5_resolution/2, 
+        target_extent[3]+era5_resolution/2
+        )
+    )
 
 lc_=ds_target.lccs_class_simpler
 
-latitudes = np.median(ds_target.lat_bounds.values, axis=1)
-longitudes = np.median(ds_target.lon_bounds.values, axis=1)
-
-latitudes_agg = find_mean_of_groups(latitudes, group_size=factor)
-longitudes_agg = find_mean_of_groups(longitudes, group_size=factor)
-
-resolution_ = abs(np.mean(np.diff(latitudes_agg)))
 
 if lc_.shape[0] == 1:
     lc_ = np.squeeze(lc_, axis=0)
-lc_agg = find_median_of_groups(arr=lc_.values, factor=factor)
+
+lc_agg = find_mode_of_groups(arr=lc_, factor=factor)
+
+resolution_ = np.round(abs(np.mean(np.diff(lc_agg.latitude))), 6)
+
+lc_agg.attrs["aggregated_resolution"] = str(resolution_)
+lc_agg.attrs["aggregated_factor"] = 7
+lc_agg.attrs["aggregation_method"] = "find_majority"
+lc_agg.attrs["rgb_code"] = str(class_rgb_mapping_simpler)
+lc_agg.attrs["class_name"] = str(class_naming_simpler)
 
 
-lc_coarse_aligned = xr.DataArray(
-    lc_agg,
-    dims=["latitude", "longitude"],
-    coords={"latitude": latitudes_agg, "longitude": longitudes_agg},
-    name="lc_coarse",
-    attrs={
-        "rgb_code":str(class_rgb_mapping_simpler),
-        "class_name":str(class_naming_simpler),
-        }
-    )
-
-if np.isclose(resolution_, target_resolution, rtol=1e-3):
+#if np.isclose(resolution_, target_resolution, rtol=1e-3):
+if lc_agg.shape == era5_shape:
     print("aggregated grid matches target grid")
+    print("no resampling required")
+    resampled_flag = "-"
+    
+    lc_agg_aligned = xr.DataArray(
+        lc_agg,
+        dims=["latitude", "longitude"],
+        coords={"latitude": latitudes_subset, "longitude": longitudes_subset},
+        name="lc_coarse",
+        attrs={
+            "resolution":str(target_resolution),
+            "resampled from":str(resampled_flag),
+            "rgb_code":str(class_rgb_mapping_simpler),
+            "class_name":str(class_naming_simpler),
+            }
+        )
 else:
     print("aggregated grid does not match target grid")
     print("due to rounding of the upscaling factor")
     print(f"ratio: {factor_non_rounded:.3f}")
     print(f"factor: {factor:.0f}")
-    print(f"Resampling from {resolution_:.3f} to {target_resolution} target grid...")
+    print(f"Resampling from {resolution_:.6f} to {target_resolution} target grid...")
+    resampled_flag = str(resolution_)
     
-    zoom_lat = 610 / lc_coarse_aligned.shape[0]
-    zoom_lon = 880 / lc_coarse_aligned.shape[1]
+    zoom_lat = target_shape[0] / lc_agg.shape[0]
+    zoom_lon = target_shape[1] / lc_agg.shape[1]
     
-    resampled_data = zoom(lc_coarse_aligned.values, zoom=(zoom_lat, zoom_lon), order=0)
+    resampled_lc = zoom(lc_agg.values, zoom=(zoom_lat, zoom_lon), order=0)
     
-    lc_coarse_aligned = xr.DataArray(
-        resampled_data,
+    lc_agg_aligned = xr.DataArray(
+        resampled_lc,
         dims=["latitude", "longitude"],
         coords={"latitude": latitudes_subset, "longitude": longitudes_subset},
         name="lc_coarse",
         attrs={
+            "resolution":str(target_resolution),
+            "resampled from":str(resampled_flag),
             "rgb_code":str(class_rgb_mapping_simpler),
             "class_name":str(class_naming_simpler),
             }
@@ -615,31 +735,40 @@ else:
 
 
 if export_to_device == True:
-    lc_coarse_aligned.to_netcdf(f"outputs\land-cover-{target_resolution}deg-year{year}.nc")
+    lc_agg_aligned.to_netcdf(f"outputs\land-cover-{target_resolution}deg-year{year}.nc")
 
 # visualize the coarser, majority based aggregation, 
 # and also aligned and croped, land cover
 if visualize == True:
-    lc_coarse_aligned_array = lc_coarse_aligned.values
+    lc_coarse_aligned_array = lc_agg_aligned.values
     rgb_simpler_coarser_aligned = create_rgb_color_array(
         array=lc_coarse_aligned_array, rgb_dict=class_rgb_mapping_simpler
         )
     
+    rgb_agg_aligned = xr.DataArray(
+        rgb_simpler_coarser_aligned,
+        dims=lc_agg_aligned.dims + ("band",),  # Inherit dims and add 'band'
+        coords={**lc_agg_aligned.coords, "band": ["R", "G", "B"]},  # Merge coords
+        attrs=lc_agg_aligned.attrs.copy(),  # Inherit attributes safely
+        name="rgb"
+    )
+    
     extent_imshow_aligned = [
-        target_extent[1]-target_resolution/2, 
-        target_extent[3]+target_resolution/2, 
-        target_extent[2]-target_resolution/2, 
-        target_extent[0]+target_resolution/2
+        rgb_agg_aligned.longitude.values.min()-target_resolution/2, 
+        rgb_agg_aligned.longitude.values.max()+target_resolution/2, 
+        rgb_agg_aligned.latitude.values.min()-target_resolution/2, 
+        rgb_agg_aligned.latitude.values.max()+target_resolution/2, 
         ]
     
-    degree_spacing = 0.1
+    
+    degree_spacing = 0.2
     fig, ax = plt.subplots(subplot_kw={"projection": ccrs.PlateCarree()})
     
     #ax.add_feature(cfeature.LAKES.with_scale("50m"), 
                    #edgecolor="black")
     
     ax.imshow(
-        rgb_simpler_coarser_aligned,
+        rgb_agg_aligned.values,
         origin='upper',
         extent=extent_imshow_aligned,
         transform=ccrs.PlateCarree()

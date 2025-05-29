@@ -10,9 +10,8 @@ train_model = True
 save_trained_model = True
 
 model_imported = (
-    'ExtraTreesRegressor_coraviates-'
-    'latitude-longitude-dem-slope-land_cover-valid_month.pkl'
-    )
+    "ExtraTreesRegressor_coraviates-latitude-longitude-dem-slope-aspect-valid_month-0.1deg-trained.pkl"
+    )  # set train_model = False to use this
 
 # this year and above apply the downscaling procedure
 downscaling_year = 2017
@@ -25,6 +24,13 @@ exclude_land_cover = True
 visualize = True
 
 export_to_device = True
+
+
+target_resolution = 0.05
+coarse_resolution = 0.1
+
+scaling_factor = coarse_resolution/target_resolution
+
 
 
 #%% importations
@@ -56,10 +62,10 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 
  
 print('Importing Data...')
-dfLD = pd.read_parquet('df.parquet')
+dfLD = pd.read_parquet(f'df-{coarse_resolution}deg.parquet')
 dfHD = pd.concat([
-    pd.read_parquet('dfHD-2017-2021.parquet'),
-    pd.read_parquet('dfHD-2022-2022.parquet')
+    pd.read_parquet(f'df-2017-2021-{target_resolution}deg.parquet'),
+    pd.read_parquet(f'df-2022-2022-{target_resolution}deg.parquet')
     ])
 
 if np.nanmean(dfLD.t2m)>200:
@@ -85,11 +91,11 @@ os.makedirs("modelakia", exist_ok=True)
 os.makedirs("output-nc-files", exist_ok=True)
 
 
-dsLD = xr.open_dataset("t2m.nc")
+dsLD = xr.open_dataset(f"t2m-{coarse_resolution}deg.nc")
 if np.nanmean(dsLD.t2m)>200:
     dsLD["t2m"] = dsLD.t2m - 273.15
 
-dsHD = xr.open_dataarray("t2mHD.nc")
+dsHD = xr.open_dataarray(f"t2m-{target_resolution}deg.nc")
 dsHD = dsHD.to_dataset(name="t2mLDonHD")
 dsHD = dsHD.sel(valid_time=dsHD.valid_time.dt.year >= downscaling_year)
 if np.nanmean(dsHD.t2mLDonHD)>200:
@@ -132,10 +138,10 @@ if train_model == True:
     # for other areas, the model might need retuning, havent tried yet...
     best_model = ExtraTreesRegressor(n_estimators=100, #100-pelop/100-optimalest/500-bayesian
                                      random_state=42, #42 pantou
-                                     max_depth=32, #18-pelop/32-optimalest/24-bayesian
+                                     max_depth=24, #18-pelop/32-optimalest/24-bayesian
                                      min_samples_leaf=2, #1-pelop/2-optimalest/2-bayesian
                                      min_samples_split=50, #20-pelop/50-optimalest/50-bayesian
-                                     max_features=0.9, #None-pelop/0.9-optimalest/0.5-bayesian
+                                     max_features=None, #None-pelop/0.9-optimalest/0.5-bayesian
                                      bootstrap=False,
                                      #warm_start=True
                                      )
@@ -157,7 +163,10 @@ else:
     print('Predicting Using Imported Model...')
     model_imported_path = os.path.join("modelakia", model_imported)
     best_model = joblib.load(model_imported_path)
-
+    
+    y_train_est = best_model.predict(X_train)
+    train_mse = mean_squared_error(y_train, y_train_est)
+    print(f"Train set MSE of the Model: {train_mse:.4f}")
 
     
 # GIA CV THELEI OLO TO SET - GIA KANONIKA TO TEST - DIORTHWSE TO
@@ -179,7 +188,7 @@ for i,feature in enumerate(features_in_model):
 
 
 covariates = "-".join(features_in_model)
-model_name = f'{type(best_model).__name__}_coraviates-{covariates}-letsee.pkl'
+model_name = f'{type(best_model).__name__}_coraviates-{covariates}-{coarse_resolution}deg-trained.pkl'
 
 if train_model == True:
     model_path = os.path.join("modelakia", model_name)
@@ -497,7 +506,7 @@ resHD = xr.DataArray(resHD, dims=dsHD.dims, coords=dsHD.coords)
 #resHD0 = xr.DataArray(resHD0, dims=dsHD.dims, coords=dsHD.coords)
 
 dsHD["resHD"] = resHD
-#dsHD["resHD0"] = resHD0
+#dsHD["resHD0"] = resHD0  # athliooo
 
 print("Done.")
 
@@ -505,10 +514,10 @@ print("Done.")
 #%% export to device
 if export_to_device == True:
     resLD.to_netcdf(
-        os.path.join("output-nc-files", "outputs_low_resolution_model.nc")
+        os.path.join("output-nc-files", f"outputs-{coarse_resolution}deg.nc")
         )
     dsHD.to_netcdf(
-        os.path.join("output-nc-files", "outputs_high_resolution_model.nc")
+        os.path.join("output-nc-files", f"outputs-{target_resolution}deg.nc")
         )
 
 
@@ -577,13 +586,13 @@ if visualize == True:
             vmin=vmin, vmax=vmax, add_colorbar=False
             )
 
-        ax.coastlines(resolution="10m", linewidth=0.35)
-        ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.25)
+        ax.coastlines(resolution="10m", linewidth=0.2)
+        ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.2)
         ax.add_feature(cfeature.LAND)
         ax.set_title(title)
         
         gl = ax.gridlines(
-            draw_labels=True, linewidth=0.25, linestyle="--", color="gray"
+            draw_labels=True, linewidth=0.2, linestyle="--", color="gray"
             )
         gl.xlocator = MultipleLocator(0.4)
         gl.ylocator = MultipleLocator(0.4)
@@ -596,7 +605,7 @@ if visualize == True:
     cbar.set_label("Temperature [°C]")
     
     #plt.tight_layout()  
-    #plt.savefig(f"multiplot{temporal_idx}.png", dpi=1000, bbox_inches="tight")
+    #plt.savefig(f"multiplot{temporal_idx}-{target_resolution}deg.png", dpi=1000, bbox_inches="tight")
     plt.show() 
     
     

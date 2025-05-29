@@ -6,12 +6,19 @@ Created on Wed Feb 26 12:43:53 2025
 
 kane auto to script synarthsh, jesus
 
-might be best to aggregate first to 0.01 degrees and
-then aggregate again to 0.1 degrees, especially for aspect??
-
 and make the importation of files a bit more clear
 ase ta perierga me to psaxnw se directories klp
 oute esy den tha ta thimasai se ligo
+
+in casees of non-integer scaling factors, where the block size is not
+divisible perfectly with the rows-columns of the original array, padding
+and filling with nans is performed
+
+a more correct approach would be to load the corresponding extent from the 
+DEM file, to fill the nans correctly
+but i dont know how this approach migh taffect residual interpolation...
+
+eukairia na arxiseis na grafeis classes xaxa...
 """
 
 import os
@@ -20,15 +27,18 @@ import numpy as np
 import xarray as xr
 #from osgeo import gdal
 from pathlib import Path
+
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
+
+from scipy.ndimage import zoom
 from sklearn.impute import KNNImputer
 from skimage.measure import block_reduce
 
 
-target_res = 0.01  # in degrees
+target_res = 0.025  # in degrees
 input_dem = "output.tif"
 extent = [19.6, 41.8, 28.3, 35.8]  #W-N-E-S
 export_nc_to_device = True
@@ -39,6 +49,24 @@ cwd = Path.cwd()
 morphography = ["dem", "slope", "aspect"]
 outputs_dir = os.path.join(cwd, "outputs", "tif")
 existing_files = set(os.listdir(outputs_dir))
+
+
+def pad_to_block_size(array, block_shape, pad_value=np.nan):
+    pad_y = (-array.shape[0]) % block_shape
+    pad_x = (-array.shape[1]) % block_shape
+    
+    pad_top = pad_y // 2
+    pad_bottom = pad_y - pad_top
+    pad_left = pad_x // 2
+    pad_right = pad_x - pad_left
+    
+    padded_array = np.pad(
+        array,
+        ((pad_top, pad_bottom), (pad_left, pad_right)),
+        mode='constant',
+        constant_values=pad_value
+        )
+    return padded_array, pad_top, pad_left
 
 
 for i,morphi in enumerate(morphography):
@@ -87,15 +115,42 @@ for i,morphi in enumerate(morphography):
     block_size = int(target_res/x_res)
     new_rows, new_cols = int(rows//block_size), int(cols//block_size)
     
-    reshaped = array.reshape(new_rows, block_size, new_cols, block_size)
+    if array.shape[0]%block_size==0 and array.shape[1]%block_size==0:
+        print("Perfectly divisable scaling factor...")
+        print("Proceeding without padding...")
+        padding = False
+        reshaped = array.reshape(new_rows, block_size, new_cols, block_size)
+        array_agg = np.nanmean(reshaped, axis=(1, 3)).round()
     
-    array_agg = np.nanmean(reshaped, axis=(1, 3)).round()
+    else:
+        print("Non-integer upscaling factor...")
+        print("Padding the edges symetrically...")
+        padding = True
+        padded, pad_top, pad_left = pad_to_block_size(array,block_size)
+        padded_rows = padded.shape[0]
+        padded_cols = padded.shape[1]
+        
+        new_padded_rows = int(padded_rows//block_size)
+        new_padded_cols = int(cols//block_size)
+        
+        reshaped = padded.reshape(new_padded_rows, block_size, new_padded_cols, block_size)
+        array_agg = np.nanmean(reshaped, axis=(1, 3)).round()
+        
+        #zoom_y = new_rows / rows
+        #zoom_x = new_cols / cols
+        # order=1: bilinear interpolation
+        #array_agg = zoom(array, (zoom_y, zoom_x), order=1)
+    
     
     if morphi == "aspect":
         #aspect filtering done later, to pass the flat surfaces
         #info (-9999 values) better to the aggregation?
         #idk if this is better, ill look into it
-        array_agg = np.nanmedian(reshaped, axis=(1, 3)).round()
+        if array.shape[0]%block_size==0 and array.shape[1]%block_size==0:
+            array_agg = np.nanmedian(reshaped, axis=(1, 3)).round()
+        else:
+            #array_agg = np.round(zoom(array, (zoom_y, zoom_x), order=1))
+            array_agg = np.nanmedian(reshaped, axis=(1, 3)).round()
         array[array<0] = -1
         array_agg[array_agg<0] = -1
     
@@ -104,38 +159,48 @@ for i,morphi in enumerate(morphography):
     
     # remove native resolution offset, # and center the grid cell value
     # and ensure no extra latitudes/longitudes were computed
-    latitudes_agg = np.arange(
-        y_max, y_max+new_rows*y_res_agg, y_res_agg
-        ) + y_res/2 + y_res_agg/2
-    latitudes_agg = latitudes_agg[:array_agg.shape[0]]
-    longitudes_agg = np.arange(
-        x_min, x_min+new_cols*x_res_agg, x_res_agg
-        ) + x_res/2 + x_res_agg/2
-    longitudes_agg = longitudes_agg[:array_agg.shape[1]]
+    # in cases of padding, also adjust for the west and north shift
+    if padding == True:
+        latitudes_agg = np.arange(
+            y_max, y_max+new_padded_rows*y_res_agg, y_res_agg
+            ) + y_res/2 + y_res_agg/2 + abs(y_res)*pad_top
+        latitudes_agg = latitudes_agg[:array_agg.shape[0]]
+        longitudes_agg = np.arange(
+            x_min, x_min+new_padded_cols*x_res_agg, x_res_agg
+            ) + x_res/2 + x_res_agg/2 - abs(x_res)*pad_left
+        longitudes_agg = longitudes_agg[:array_agg.shape[1]]
+    else:
+        latitudes_agg = np.arange(
+            y_max, y_max+new_rows*y_res_agg, y_res_agg
+            ) + y_res/2 + y_res_agg/2
+        latitudes_agg = latitudes_agg[:array_agg.shape[0]]
+        longitudes_agg = np.arange(
+            x_min, x_min+new_cols*x_res_agg, x_res_agg
+            ) + x_res/2 + x_res_agg/2
+        longitudes_agg = longitudes_agg[:array_agg.shape[1]]
     
-    if export_nc_to_device == True:
-        # initialize Dataset
-        if  i == 0:
-            dims = [
-                "latitude",
-                "longitude"
-                ]
-            
-            ds_nc = xr.Dataset(
-                coords = {
-                    "latitude" : latitudes_agg,
-                    "longitude" : longitudes_agg
-                    },
-            )
+    # initialize Dataset
+    if  i == 0:
+        dims = [
+            "latitude",
+            "longitude"
+            ]
         
-        ds_nc[morphi] = (dims, array_agg)
-        
+        ds_nc = xr.Dataset(
+            coords = {
+                "latitude" : latitudes_agg,
+                "longitude" : longitudes_agg
+                },
+        )
+    
+    ds_nc[morphi] = (dims, array_agg)        
         
         
-
-netcdf_name = f"{dem_file_name}-morphography-{target_res}deg.nc"
-netcdf_path = os.path.join(cwd, "outputs", "python", netcdf_name)
-ds_nc.to_netcdf(netcdf_path)
+    
+if export_nc_to_device == True:
+    netcdf_name = f"{dem_file_name}-morphography-{target_res}deg.nc"
+    netcdf_path = os.path.join(cwd, "outputs", "python", netcdf_name)
+    ds_nc.to_netcdf(netcdf_path)
 
 
 #%% optikopoihsh
@@ -175,12 +240,12 @@ for morphi in morphography:
         vmin=vmin, vmax=vmax
     )
     
-    ax.coastlines(resolution="10m", linewidth=0.25)
-    ax.add_feature(cfeature.BORDERS, linestyle="--", linewidth=0.25)
+    ax.coastlines(resolution="10m", linewidth=0.2)
+    ax.add_feature(cfeature.BORDERS, linestyle=":", linewidth=0.2)
     ax.add_feature(cfeature.LAND)
     
     gl = ax.gridlines(draw_labels=True, linestyle="--", 
-                      linewidth=0.25, color="gray",
+                      linewidth=0.2, color="gray",
                       xlocs=np.arange(
                           extent[0], 
                           extent[2], 

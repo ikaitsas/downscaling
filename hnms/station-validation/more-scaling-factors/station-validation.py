@@ -30,6 +30,10 @@ import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
 from matplotlib.ticker import MultipleLocator
 
+
+coarse_resolution = 0.1
+target_resolution = 0.05
+
 stations = pd.read_csv(
     "Valid_HNMS_Stations_Info__N41.8-W19.6-S35.8-E28.3__Period1992-2022.csv"
     )
@@ -37,8 +41,8 @@ insitu = pd.read_csv("TG-m__N41.8-W19.6-S35.8-E28.3__Period1992-2022.csv",
                      index_col=0, parse_dates=True
                      )
 
-ld = xr.open_dataset("outputs_low_resolution_model-nolc.nc")
-hd = xr.open_dataset("outputs_high_resolution_model-nolc.nc")
+ld = xr.open_dataset(f"outputs-{coarse_resolution}deg.nc")
+hd = xr.open_dataset(f"outputs-{target_resolution}deg.nc")
 
 
 visualize = True
@@ -304,15 +308,17 @@ def idw_interpolation_across_time(target, dataarray, power=2):
         
         # Perform the interpolation  
         for distance, value in zip(distances, known_points):
+            if distance == 0:
+                interpolated_values[timestamp, 0, 0] = value[1]
+                total_weight = 1
+                break
             if np.isnan(value[1]):
                 continue
             weight = 1 / (distance ** power)
             total_weight += weight
             interpolated_value += weight * value[1]
             
-            if distance == 0:
-                interpolated_values.append(value[1])
-                break
+            
         else:
             if total_weight != 0:
                 interpolated_values[timestamp, 0, 0] = \
@@ -535,7 +541,7 @@ if visualize == True:
         
     #plt.tight_layout() 
     if save_figures == True:
-        plt.savefig(f"multiplot{temporal_idx}.png", dpi=1500, bbox_inches="tight")
+        plt.savefig(f"outputs//multiplot{temporal_idx}-{target_resolution}deg.png", dpi=1500, bbox_inches="tight")
     plt.show() 
 
 
@@ -590,7 +596,7 @@ for i in range(len(stations)):
         plt.ylabel("Temperature  [°C]")
         plt.grid()
         if save_figures == True:
-            plt.savefig(f'timeseries-{station_code}-{station_name}.png', dpi=300, bbox_inches="tight")
+            plt.savefig(f'outputs//timeseries-{station_code}-{station_name}-{target_resolution}deg.png', dpi=300, bbox_inches="tight")
         plt.show()
     
 
@@ -659,7 +665,7 @@ for i in range(len(stations)):
             plt.title(f"Temperature Scatter Plot - {station_name} ({station_code})")
             plt.axis("square")
             if save_figures == True:
-                plt.savefig(f"scatter-plot-monthly-{station_code}-{station_name}.png", dpi=500, bbox_inches="tight")
+                plt.savefig(f"outputs//scatter-plot-monthly-{station_code}-{station_name}-{target_resolution}deg.png", dpi=500, bbox_inches="tight")
             plt.show()
     
     
@@ -770,7 +776,7 @@ if visualize == True:
     plt.grid()
     plt.legend()
     if save_figures == True:
-        plt.savefig("histogram.png", dpi=1000)
+        plt.savefig(f"outputs//histogram-{target_resolution}deg.png", dpi=1000)
     plt.show()
     
     
@@ -815,7 +821,7 @@ if visualize == True:
     plt.title("Temperature Scatter Plot")
     plt.axis("square")
     if save_figures == True:
-        plt.savefig("scatter-plot-monthly.png", dpi=500, bbox_inches="tight")
+        plt.savefig(f"outputs//scatter-plot-monthly-{target_resolution}deg.png", dpi=500, bbox_inches="tight")
     plt.show()
 
 
@@ -841,7 +847,7 @@ if visualize == True:
     plt.xlabel("Temperature  [°C]")
     plt.ylabel("Probability")
     if save_figures == True:
-        plt.savefig("ecdf-temperatures.png", dpi=500)
+        plt.savefig(f"outputs//ecdf-temperatures-{target_resolution}deg.png", dpi=500)
     plt.show()
     
     
@@ -860,7 +866,7 @@ if visualize == True:
         framealpha=0.3
         )
     if save_figures == True:
-        plt.savefig("qq-plot.png", dpi=1000)
+        plt.savefig(f"outputs//qq-plot-{target_resolution}deg.png", dpi=1000)
     plt.show()
 
 
@@ -906,7 +912,8 @@ temporal_metrics["downscaled_variance"] = df_stacked[mask].groupby(
 temporal_metrics["insitu_variance"] = df_stacked[mask].groupby(
     temporal_group_key)[["insitu"]].var()
 
-temporal_metrics.round(decimals=3).to_excel("temporal_metrics.xlsx")
+temporal_metrics = temporal_metrics.round(decimals=3)
+temporal_metrics.to_excel(f"outputs//temporal_metrics-{target_resolution}deg.xlsx")
 
 
 station_group_key = "station_code"
@@ -922,7 +929,8 @@ station_metrics["downscaled_variance"] = df_stacked[mask].groupby(
 station_metrics["insitu_variance"] = df_stacked[mask].groupby(
     station_group_key)[["insitu"]].var()
 
-station_metrics.round(decimals=3).to_excel("station_metrics.xlsx")
+station_metrics = station_metrics.round(decimals=3)
+station_metrics.to_excel(f"outputs//station_metrics-{target_resolution}deg.xlsx")
 
 
 #%% Metrics Visualization

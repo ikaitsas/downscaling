@@ -34,15 +34,19 @@ save_to_device = True
 extract_nn_training_data = False  #keep false!
 
 downscaling_year_start = 2017
+target_resolution = 0.05
+coarse_resolution = 0.1
 
 
 # morphography files
-dem = xr.open_dataset("output-morphography-0.1deg.nc")
-demHD = xr.open_dataset("output-morphography-0.01deg.nc")
+dem = xr.open_dataset(f"output-morphography-{coarse_resolution}deg.nc")
+demHD = xr.open_dataset(f"output-morphography-{target_resolution}deg.nc")
 
-lc = xr.open_dataarray("land-cover-0.1deg-bigger--2.nc")
-lcHD = xr.open_dataarray("land-cover-0.01deg-bigger--2.nc")
+lc = xr.open_dataarray("land-cover-0.1deg-kai-kala-correct.nc")
+lcHD = xr.open_dataarray("land-cover-0.01deg-kai-kala-correct.nc")
 
+
+scaling_factor = coarse_resolution/target_resolution
 
 
 #%% extracting file location - NEED TO MAKE THIS A FUNCTION
@@ -84,13 +88,17 @@ ds.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 ds.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
 ds.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
-lc = lc.astype("uint8")
-lc = lc.rename(year='valid_year').sel(valid_year=ds['valid_year'])
-lc = lc.assign_coords(
-    latitude=ds.latitude,
-    longitude=ds.longitude
-) # eliminate various float point mismatches
-ds.coords["land_cover"] = lc
+if coarse_resolution == 0.1:
+    lc = lc.astype("uint8")
+    lc = lc.rename(year='valid_year').sel(valid_year=ds['valid_year'])
+    lc = lc.assign_coords(
+        latitude=ds.latitude,
+        longitude=ds.longitude
+    ) # eliminate various float point mismatches
+    ds.coords["land_cover"] = lc
+    
+    lc = None
+
 '''
 # care, doing:
 ds.coords["land_cover"] = (("valid_year", "latitude", "longitude"), lc.data)
@@ -115,17 +123,28 @@ if "expver" in df.columns:
     df = df.drop(columns=['expver'])
 
 # explicitly order the columns, important for modelling!
-t2mColumn = ds.t2m.name  
-column_to_keep = [t2mColumn, 
-                  ds.latitude.name, 
-                  ds.longitude.name,
-                  ds.dem.name, 
-                  ds.slope.name,
-                  ds.aspect.name,
-                  ds.land_cover.name,
-                  ds.valid_year.name,
-                  ds.valid_month.name
-                  ]
+t2mColumn = ds.t2m.name
+if coarse_resolution==0.1 and target_resolution==0.01:
+    column_to_keep = [t2mColumn, 
+                      ds.latitude.name, 
+                      ds.longitude.name,
+                      ds.dem.name, 
+                      ds.slope.name,
+                      ds.aspect.name,
+                      ds.land_cover.name,
+                      ds.valid_year.name,
+                      ds.valid_month.name
+                      ]
+else:
+    column_to_keep = [t2mColumn, 
+                      ds.latitude.name, 
+                      ds.longitude.name,
+                      ds.dem.name, 
+                      ds.slope.name,
+                      ds.aspect.name,
+                      ds.valid_year.name,
+                      ds.valid_month.name
+                      ]
 
 if ("valid_time" in df.index.names) & ("valid_month" not in df.columns):
     print("f")
@@ -144,19 +163,15 @@ if "valid_time" in df.columns:
 df = df[column_to_keep]  #ensure t2m is always first column
 
 if save_to_device == True:
-    df.to_parquet("df.parquet")
-    ds.t2m.to_netcdf("t2m.nc")
+    df.to_parquet(f"df-{coarse_resolution}deg.parquet")
+    ds.t2m.to_netcdf(f"t2m-{coarse_resolution}deg.nc")
 
 #df = df.reset_index(drop=True)
 #ddf = from_pandas(df, int(ds.valid_month.values.shape[0]/2))
 df = None
-lc = None
 
 
 #%% create downscalign HD array
-# need to make scaling_factor automatically, not manually assigned
-scaling_factor = 10  #divide resolution by this number
-
 print('Producing HD version...')
 print(f'Dividing each grid cell {scaling_factor}x{scaling_factor} times...')
 #axis=1 latitude, axis=2 longitude, change accordingly
@@ -196,13 +211,17 @@ t2mHD.coords["aspect"].attrs["description"] = "Aspect at each lat-lon pair"
 t2mHD.coords["valid_year"] = (["valid_time"], ds.valid_time.dt.year.data)
 t2mHD.coords["valid_month"] = (["valid_time"], ds.valid_time.dt.month.data)
 
-lcHD = lcHD.astype("uint8")
-lcHD = lcHD.rename(year='valid_year').sel(valid_year=t2mHD['valid_year'])
-lcHD = lcHD.assign_coords(
-    latitude=t2mHD.latitude,
-    longitude=t2mHD.longitude
-) # eliminate various float point mismatches
-t2mHD.coords["land_cover"] = lcHD
+if target_resolution == 0.01:
+    lcHD = lcHD.astype("uint8")
+    lcHD = lcHD.rename(year='valid_year').sel(valid_year=t2mHD['valid_year'])
+    lcHD = lcHD.assign_coords(
+        latitude=t2mHD.latitude,
+        longitude=t2mHD.longitude
+    ) # eliminate various float point mismatches
+    t2mHD.coords["land_cover"] = lcHD
+    
+    lcHD = None
+
 
 
 '''
@@ -212,7 +231,6 @@ t2mHD = t2mHD.sel(
     )
 '''
 
-lcHD = None
 
 
 #%% extract as arrays- might be applicable for large datasets
@@ -234,10 +252,7 @@ hd_aspect = np.tile(t2mHD.aspect.values.flatten(), hd_months.shape).astype(np.in
 
 
 #%% convert to dataframe - not applicable for very large datasets
-print(f'Extracting {era5Land_resolution/scaling_factor}deg HD dataframe...')
-'''
-
-'''
+print(f'Extracting {coarse_resolution/scaling_factor}deg HD dataframe...')
 # since, i think, the fitting extra trees algorithm does not take into account
 # the year, the HD version of the geographic area can be taken for 12 months,
 # as only the month is the temporal covariate needed.
@@ -291,7 +306,7 @@ for start_year in start_years:
     #dfHD = dfHD.loc[:, column_to_keep]
 
     if save_to_device == True:
-        filename = f"dfHD-{start_year}-{end_year}.parquet"
+        filename = f"df-{start_year}-{end_year}-{target_resolution}deg.parquet"
         dfHD.loc[:, column_to_keep].to_parquet(filename)
         print(f"Saved: {filename}")
 
@@ -299,7 +314,7 @@ for start_year in start_years:
 if save_to_device == True:
     # HD is for high resolution auxilliary variables
     # t2mHD is not "HD" by itself, just repeated
-    t2mHD.to_netcdf("t2mHD.nc")
+    t2mHD.to_netcdf(f"t2m-{target_resolution}deg.nc")
 
 
 #%%
@@ -371,7 +386,7 @@ degree_spacing = 0.5
 if visualize == True:
     t2m = ds.t2m - 273.15
     print('Mapping2...')
-
+    
     # order: t2mLD, t2mLD_pred, t2m_pred, t2m_res
     # dont change the order of the above
     # or change it everywhere the same below!
@@ -432,7 +447,7 @@ if visualize == True:
     cbar.set_label("Temperature [°C]")
         
     #plt.tight_layout() 
-    plt.savefig(f"images-maps\\t2m-era5-land-multiplot{valid_time_index}.png", dpi=1500, bbox_inches="tight")
+    #plt.savefig(f"images-maps\\t2m-era5-land-multiplot{valid_time_index}.png", dpi=1500, bbox_inches="tight")
     plt.show() 
 
 
