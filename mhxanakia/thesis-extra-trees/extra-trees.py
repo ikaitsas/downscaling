@@ -33,7 +33,6 @@ coarse_resolution = 0.1
 scaling_factor = coarse_resolution/target_resolution
 
 
-
 #%% importations
 print('Importing Libraries...')
 
@@ -103,7 +102,7 @@ if np.nanmean(dsHD.t2mLDonHD)>200:
     dsHD["t2mLDonHD"] = dsHD.t2mLDonHD - 273.15
 
 
-#%% train/test split, import or train/optimize model
+#%% train/test split
 dfLD_ = dfLD_.dropna(subset=['t2m'])  # not fault-proof for all NaNs!
 
 dfLD_train = dfLD_.loc[dfLD_['valid_year']<holdout_test_year]
@@ -134,7 +133,9 @@ if exclude_land_cover == True:
     if "land_cover" in dfLD_.columns:
         dfLD_ = dfLD_.drop(columns=["land_cover"])
 '''      
-        
+   
+
+#%% train or import model     
 # model gets trained
 if train_model == True:
     
@@ -149,9 +150,9 @@ if train_model == True:
     # for other areas, the model might need retuning, havent tried yet...
     best_model = ExtraTreesRegressor(n_estimators=100, #100-pelop/100-optimalest/500-bayesian
                                      random_state=42, #42 pantou
-                                     max_depth=24, #18-pelop/32-optimalest/24-bayesian
+                                     max_depth=28, #18-pelop/28-optimalest/24-bayesian
                                      min_samples_leaf=2, #1-pelop/2-optimalest/2-bayesian
-                                     min_samples_split=50, #20-pelop/50-optimalest/50-bayesian
+                                     min_samples_split=20, #20-pelop/20-optimalest/50-bayesian
                                      max_features=None, #None-pelop/0.9-optimalest/0.5-bayesian
                                      bootstrap=False,
                                      #warm_start=True
@@ -165,8 +166,8 @@ if train_model == True:
     best_model.fit(X_train, y_train)
     
     y_train_est = best_model.predict(X_train)
-    train_mse = mean_squared_error(y_train, y_train_est)
-    print(f"Train set MSE of the Model: {train_mse:.4f}")
+    train_rmse = np.sqrt( mean_squared_error(y_train, y_train_est) )
+    print(f"Train set rMSE of the Model: {train_rmse:.4f}")
     
     
 # model gets imported
@@ -176,15 +177,15 @@ else:
     best_model = joblib.load(model_imported_path)
     
     y_train_est = best_model.predict(X_train)
-    train_mse = mean_squared_error(y_train, y_train_est)
-    print(f"Train set MSE of the Model: {train_mse:.4f}")
+    train_rmse = np.sqrt( mean_squared_error(y_train, y_train_est) )
+    print(f"Train set rMSE of the Model: {train_rmse:.4f}")
 
     
 # GIA CV THELEI OLO TO SET - GIA KANONIKA TO TEST - DIORTHWSE TO
 # make predictions on hold-out set and show some stats
 y_pred = best_model.predict(X_test)
-test_mse = mean_squared_error(y_test, y_pred)
-print(f"Hold-out Test set MSE of the Model: {test_mse:.4f}")
+test_rmse = np.sqrt( mean_squared_error(y_test, y_pred) )
+print(f"Hold-out Test set rMSE of the Model: {test_rmse:.4f}")
 
 
 print('\nParameters of the Model:')

@@ -3,6 +3,8 @@
 Created on Wed Jan 30 13:03:12 2025
 
 @author: yiann
+
+Moving or expanding window folds should be tried...
 """
 downscaling_year = 2017 
 
