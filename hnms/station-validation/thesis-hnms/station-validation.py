@@ -16,6 +16,11 @@ from scipy.special import kl_div
 from scipy.stats import ks_2samp
 from scipy.stats import wasserstein_distance
 from scipy.stats import anderson_ksamp
+
+from scipy.stats import wilcoxon
+from scipy.stats import ttest_rel
+from scipy.stats import shapiro
+from scipy.stats import anderson
 import statsmodels.api as sm
 
 from sklearn.metrics import mean_squared_error
@@ -32,7 +37,7 @@ from matplotlib.ticker import MultipleLocator
 
 
 coarse_resolution = 0.1
-target_resolution = 0.05
+target_resolution = 0.01
 
 stations = pd.read_csv(
     "Valid_HNMS_Stations_Info__N41.8-W19.6-S35.8-E28.3__Period1992-2022.csv"
@@ -41,11 +46,11 @@ insitu = pd.read_csv("TG-m__N41.8-W19.6-S35.8-E28.3__Period1992-2022.csv",
                      index_col=0, parse_dates=True
                      )
 
-ld = xr.open_dataset(f"outputs-{coarse_resolution}deg.nc")
-hd = xr.open_dataset(f"outputs-{target_resolution}deg.nc")
+ld = xr.open_dataset(f"outputs-{coarse_resolution}deg-with-lc.nc")
+hd = xr.open_dataset(f"outputs-{target_resolution}deg-with-lc.nc")
 
 
-visualize = True
+visualize = False
 save_figures = True
 temporal_idx = 47
 target = (37.4067,22.7192)
@@ -545,10 +550,11 @@ if visualize == True:
     plt.show() 
 
 
-#%% paidikh xara
+#%% per station stats extraction
 dfLD = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
 dfHD = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
 dfSITE = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
+dfERROR_DIFF = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
 
 '''
 Pithanotata na yparxei kai grhgoroteros tropos
@@ -557,6 +563,24 @@ Prosoxh sta indexes, exei mismatch logw multiindex
 sta dataarray derived products
 me kamia lambda function mhpws??
 '''
+slopesLD = []
+slopes_stdLD = []
+interceptsLD = []
+#intercepts_stdLD = []
+rvaluesLD = []
+
+slopesHD = []
+slopes_stdHD = []
+interceptsHD = []
+#intercepts_stdHD = []
+rvaluesHD = []
+
+stats_wilcoxon = []
+pvalues_wilcoxon = []
+
+non_normal_diff_error_distributions = []
+statistically_significant_diffs = []
+
 print("Performing IDW interpolation on LD & HD Data...")
 for i in range(len(stations)):
     station = stations.iloc[i]
@@ -599,32 +623,96 @@ for i in range(len(stations)):
             plt.savefig(f'outputs//timeseries-{station_code}-{station_name}-{target_resolution}deg.png', dpi=300, bbox_inches="tight")
         plt.show()
     
-
     
     if seriesLD.isna().all():
         print("Station outside ERA5-Land grid.")
         print("\n")
+        slopeLD = np.nan
+        slope_stdLD = np.nan
+        interceptLD = np.nan
+        rvalueLD = np.nan
+        
+        slopeHD = np.nan
+        slope_stdHD = np.nan
+        interceptHD = np.nan
+        rvalueHD = np.nan
+        
+        stat_wilcoxon = np.nan
+        pvalue_wilcoxon = np.nan
+        
+        diff = np.nan
+        non_normal_diff_error_distribution = "NaN"
+        statistically_significant_diff = "NaN"
+        
     else:
         print("Station inside ERA5-Land grid.")
-        slopeLD, interceptLD, r_valueLD, p_valueLD, std_errLD = linregress(
+        slopeLD, interceptLD, rvalueLD, pvalueLD, slope_stdLD = linregress(
             seriesSITE, seriesLD
             )
         print("for ERA5-Land:")
-        print(
-            linregress(
-                seriesSITE, seriesLD
-                )
-            )
-        slopeHD, interceptHD, r_valueHD, p_valueHD, std_errHD = linregress(
+        print(linregress(seriesSITE, seriesLD))
+        slopeHD, interceptHD, rvalueHD, pvalueHD, slope_stdHD = linregress(
             seriesSITE, seriesHD
             )
-        print("for ERA5-Land:")
-        print(
-            linregress(
-                seriesSITE, seriesHD
-                )
-            )
+        print(f"for Downscaled to {target_resolution}deg:")
+        print(linregress(seriesSITE, seriesHD))
         print("\n")
+        
+        
+        # wilcoxon signed rank test
+        # absolute values to check precision/performance
+        # non-absolute to check for biases
+        errorLD = np.abs(seriesLD.values - seriesSITE.values)
+        errorHD = np.abs(seriesHD.values - seriesSITE.values)
+        
+        # LD-HD to check if downscaled is an improvement
+        diff = np.round(errorLD - errorHD, 2)  # to avoid roundoff error
+        # test normality of d
+        stat_shapiro, pvalue_shapiro = shapiro(diff)
+        if pvalue_shapiro < 0.05:
+            print("difference of errors distribution not normal")
+            non_normal_diff_error_distribution = "non_normal"
+        else:
+            non_normal_diff_error_distribution = "normal"
+        
+        
+        if np.median(diff) > 0:  #case of statistically significant improvement
+            print(f"median error diff in favor of downscaled for {station_name} ({station_code})...")
+            print("checking for statistically significant improvement...")
+            stat_wilcoxon, pvalue_wilcoxon = wilcoxon(diff, alternative="greater")
+            if pvalue_wilcoxon <0.05:
+                print("IMPROVEMENT detected...")
+                statistically_significant_diff = "better"
+            else:
+                print("NO statisrical significance afterall...")
+                statistically_significant_diff = "none"
+        
+        if np.median(diff) < 0:  #case of statistically significant deterioration
+            print(f"median error diff against downscaled for {station_name} ({station_code})...")
+            print("checking for statistically significant deterioration...")
+            stat_wilcoxon, pvalue_wilcoxon = wilcoxon(diff, alternative="less")
+            if pvalue_wilcoxon <0.05:
+                print("statistically significant DETERIORATION detected...")
+                statistically_significant_diff = "worse"
+            else:
+                print("NO statisrical significance afterall...")
+                statistically_significant_diff = "none"
+        
+        if np.median(diff) == 0:  #any practical significance?
+            print(f"median error diff ZERO for {station_name} ({station_code})...")
+            print("CAREFULLY INTERPRET TEST RESULTS FOR THIS STATION...")
+            print("checking for statistically significant differences...")
+            stat_wilcoxon, pvalue_wilcoxon = wilcoxon(diff, alternative="less")
+            if pvalue_wilcoxon <0.05:
+                print("statistically significant DIFFERENCES detected...")
+                statistically_significant_diff = "CARE"
+            else:
+                print("NO statisrical significance afterall...")
+                statistically_significant_diff = "none"
+        
+        print("\n")
+        # most error diffs are not normal...
+        #stat_ttest, pvalue_ttest = ttest_rel(errorHD, errorLD)
         
         if visualize == True:
             # scatter plot per station
@@ -669,9 +757,31 @@ for i in range(len(stations)):
             plt.show()
     
     
+    dfERROR_DIFF.loc[:,str(station_code)] = diff
+
+    slopesLD.append(slopeLD)
+    slopes_stdLD.append(slope_stdLD)
+    interceptsLD.append(interceptLD)
+    rvaluesLD.append(rvalueLD)
+
+    slopesHD.append(slopeHD)
+    slopes_stdHD.append(slope_stdHD)
+    interceptsHD.append(interceptHD)
+    rvaluesHD.append(rvalueHD)
+    
+    stats_wilcoxon.append(stat_wilcoxon)
+    pvalues_wilcoxon.append(pvalue_wilcoxon)
+    
+    non_normal_diff_error_distributions.append(non_normal_diff_error_distribution)
+    statistically_significant_diffs.append(statistically_significant_diff)
+    
+    
     dfLD.loc[:,str(station_code)] = seriesLD.values
     dfHD.loc[:,str(station_code)] = seriesHD.values
 
+
+stations["statistical_significance"] = statistically_significant_diffs
+stations["error_diff"] =  dfERROR_DIFF.mean(axis=0).values
 
 
 #%% Linear Fitting and Distribution Visualization
@@ -1011,6 +1121,7 @@ More tests to consider:
         Paired T-Test or Wilcoxon Signed-Rank Test
         Bootstrap Methods
 '''
+'''
 # 2 sided Kolmogorov-Smirnov Test
 # Measures maximum difference between CDFs?
 # Checking if two distributions are significantly different?
@@ -1029,7 +1140,7 @@ print("Downscaled vs Insitu:")
 print(f"statistic: {ks_downscaled.statistic:.4f}, p-value: {ks_downscaled.pvalue:.4f}")
 print("ERA5-Land vs Downscaled Intercomparison:")
 print(f"statistic: {ks_intercomparison.statistic:.4f}, p-value: {ks_intercomparison.pvalue:.4f}")
-
+'''
 
 # Wasserstein Distance (or Earth Mover's Distance)
 # Measures total work needed to move one distribution to another?
@@ -1038,6 +1149,7 @@ print(f"statistic: {ks_intercomparison.statistic:.4f}, p-value: {ks_intercompari
 Especially useful if both models give p-value<0.05?
 Here we can define an improvement threshhold, like 20%
 if wd_downscaled < 0.8*wd_era5land, then we did something...
+'''
 '''
 wd_era5land = wasserstein_distance(
     df_stacked_mask.insitu, df_stacked_mask.idw
@@ -1079,7 +1191,7 @@ if visualize == True:
     plt.grid()
     plt.title("Kullback-Leibler Divergence")
     plt.show()
-
+'''
 
 
 #%% koments
