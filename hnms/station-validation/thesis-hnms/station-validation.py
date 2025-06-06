@@ -5,12 +5,15 @@ Created on Tue Mar 18 16:02:29 2025
 @author: yiann
 """
 
+import sys
+from typing import Tuple
+
 import math
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from scipy import stats
+from scipy.stats import probplot
 from scipy.stats import linregress
 from scipy.special import kl_div
 from scipy.stats import ks_2samp
@@ -21,7 +24,16 @@ from scipy.stats import wilcoxon
 from scipy.stats import ttest_rel
 from scipy.stats import shapiro
 from scipy.stats import anderson
+from scipy.stats import skew
+
+from arch.bootstrap import optimal_block_length
+from arch.bootstrap import MovingBlockBootstrap
+from arch.bootstrap import StationaryBootstrap
+
 import statsmodels.api as sm
+from statsmodels.tsa.stattools import acf
+from statsmodels.tsa.stattools import pacf
+from statsmodels.graphics.tsaplots import plot_acf
 
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import mean_absolute_error
@@ -32,12 +44,11 @@ import seaborn as sns
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import cartopy.feature as cfeature
-import matplotlib.ticker as mticker
 from matplotlib.ticker import MultipleLocator
 
 
 coarse_resolution = 0.1
-target_resolution = 0.01
+target_resolution = 0.05
 
 stations = pd.read_csv(
     "Valid_HNMS_Stations_Info__N41.8-W19.6-S35.8-E28.3__Period1992-2022.csv"
@@ -51,14 +62,19 @@ hd = xr.open_dataset(f"outputs-{target_resolution}deg-with-lc.nc")
 
 
 visualize = False
-save_figures = True
+save_figures = False
+
 temporal_idx = 47
 target = (37.4067,22.7192)
 dataarrayLD = ld.t2m
 dataarrayHD = hd.t2mHD + hd.resHD
 
 
-#%% functions
+#log_file = open(f'printed_output{target_resolution}.log', 'w', encoding="utf-8")
+#sys.stdout = log_file
+
+
+#%% functions for idw
 def find_bounding_box(target, dataarray):
     """
     The returned list of bounding points is shown clockwise
@@ -356,6 +372,7 @@ def idw_interpolation_across_time(target, dataarray, power=2):
     )
 
 
+#%% metrics and statistics functions
 def root_mean_squared_error(y_true, y_pred):
     mse = mean_squared_error(y_true, y_pred)
     return np.sqrt(mse)
@@ -428,10 +445,358 @@ def ecdf(data):
     '''
     return np.sort(data), np.arange(1, len(data) + 1) / len(data)
 
+
+def yule_kendall_skewness(data):
+    q1 = np.percentile(data, 25)
+    q2 = np.percentile(data, 50)  # Median
+    q3 = np.percentile(data, 75)
+
+    if q3 - q1 == 0:
+        return np.nan  # Avoid division by zero if data is constant
+    return (q3 + q1 - 2 * q2) / (q3 - q1)
+
+
+#%% rounding functions for scatter plot
 def round_sigfig(x):
     if x == 0:
         return 0
     return round(x, -int(math.floor(math.log10(abs(x)))))
+
+def round_value_to_match_std(value, std_rounded):
+    # Convert to string, split by decimal
+    s = f"{std_rounded:.10f}".rstrip('0')  # string without trailing zeros
+    if '.' in s:
+        decimal_places = len(s.split('.')[1])
+    else:
+        decimal_places = 0
+    return round(value, decimal_places)
+
+def make_legend_label(slope, slope_std, intercept, intercept_std):
+    # Round stds to 1 significant digit
+    slope_std_rounded = round_sigfig(slope_std)
+    intercept_std_rounded = round_sigfig(intercept_std)
+
+    # Round slope/intercept to same decimal place as stds
+    slope_rounded = round_value_to_match_std(slope, slope_std_rounded)
+    intercept_rounded = round_value_to_match_std(intercept, intercept_std_rounded)
+
+    # Format the string nicely, using ± symbol
+    label = (f"y = ({slope_rounded} ± {slope_std_rounded})x "
+             f"+ ({intercept_rounded} ± {intercept_std_rounded})")
+    return label
+
+
+#%% bootstrap testing functions
+def compute_optimal_block_length1(series):
+    n = len(series)
+    acf_values = acf(series, nlags=n-1, fft=True)
+    
+    # Compute the "correlation length"
+    k = np.argmax(np.abs(acf_values) < np.exp(-1)) # First lag where ACF < 1/e
+    optimal_block = int(np.ceil(n**(1/3) * k**(2/3)))
+    
+    return max(2, min(optimal_block, n//2))  # Keep within reasonable bounds
+
+    
+def multi_seasonal_block_length(data, candidate_periods=[3, 6, 12, 24, 36, 48, 60]):
+    max_period_tolerated = len(data)//2
+    candidate_periods = [period for period in candidate_periods if period <= max_period_tolerated]
+    
+    acf_vals = acf(data, nlags=max(candidate_periods))
+    strengths = [acf_vals[lag] for lag in candidate_periods]
+    dominant_period = candidate_periods[np.argmax(np.abs(strengths))]
+    
+    # Ensure block length isn't too large
+    max_reasonable = int(len(data)**(1/2))
+    return min(dominant_period, max_reasonable)
+
+
+###### PETAMAAAA
+def compute_vif_significant_lags(series, cutoff=None, nlags=None, alpha=0.05):
+    n = len(series)
+    acf_vals, confint = acf(series, nlags=nlags, alpha=alpha)
+    
+    # for below, might be simpler to emulate AR(1) or AR(2) models, and
+    # only keep these autoregression lags
+    # for monthly temperature in particular, AR(2) is better? (Wilks, 1997)
+    # they are selected with cutoff == 1 or 2
+    
+    V = 1  # Start with base
+    if cutoff == 1:
+        significant_vals = acf_vals[1:cutoff+1]
+        for k,rho_k in enumerate(significant_vals):
+            V += 2 * (1 - k/n) * rho_k  # Add only 1 lag
+    elif cutoff == 2:
+        significant_vals = acf_vals[1:cutoff+1]
+        for k,rho_k in enumerate(significant_vals):  
+            V += 2 * (1 - k/n) * rho_k  # Add only 2 lags
+    else:
+        # corresponds to the shaded area in plot_acf
+        confint_centered = np.abs(confint[:,1]-acf_vals) # auto kaloo
+        significant_lags_idx = np.where(np.abs(acf_vals)>confint_centered)[0][1:]
+        significant_vals = acf_vals[significant_lags_idx]
+        for k,rho_k in enumerate(significant_vals):  # exclude lag 0
+            V += 2 * (1 - k/n) * rho_k  # Add only significant lags
+    return V
+
+
+def bootstrap_test_autocorrelated(
+    x: np.ndarray,
+    y: np.ndarray,
+    block_size: int,
+    method: str = "moving_block",
+    n_bootstrap: int = 10000
+) -> Tuple[float, Tuple[float, float], float]:
+    """
+    Compare two autocorrelated time series using moving block bootstrap.
+    
+    Args:
+        x: First time series array
+        y: Second time series array
+        block_size: Block length for bootstrap (should capture autocorrelation)
+        ci_percent: Desired confidence interval percentage (e.g., 95 for 95% CI)
+        n_bootstrap: Number of bootstrap iterations
+        
+    Returns:
+        Tuple containing:
+        - observed_mean_diff: The observed mean difference (x.mean() - y.mean())
+        - ci: Confidence interval bounds as (lower, upper)
+        - p_value: Two-sided p-value for the mean difference
+    """
+    # Validate inputs
+    assert len(x) == len(y), "Arrays must be of equal length"
+    assert block_size > 0, "Block size must be positive"
+    
+    # Calculate observed statistic
+    observed_mean_diff = np.mean(x) - np.mean(y)
+    
+    # Combine data for paired bootstrap
+    combined = np.column_stack((x, y))
+    
+    # Initialize bootstrap
+    if method == "moving_block":
+        bs = MovingBlockBootstrap(block_size, combined, seed=1234)
+    else:
+        bs = StationaryBootstrap(block_size, combined, seed=1234)
+    
+    # Run bootstrap
+    bootstrap_diffs = []
+    resampled_shapes = []
+    for result in bs.bootstrap(n_bootstrap):
+        resampled_data = result[0][0]  # Get resampled array
+        x_resampled = resampled_data[:, 0]
+        y_resampled = resampled_data[:, 1]
+        bootstrap_diff = np.mean(x_resampled) - np.mean(y_resampled)
+        # subtracting observed_mean_diff, not S0 (0 zero)
+        # thisis done to reflect the null hypothesis
+        bootstrap_diff = bootstrap_diff - observed_mean_diff
+        bootstrap_diffs.append(bootstrap_diff)
+        
+        resampled_shapes.append(resampled_data.shape)
+    
+    bootstrap_diffs = np.array(bootstrap_diffs)
+    
+    # Calculate p-value (two-sided)
+    # Center the bootstrap distribution at 0 for null hypothesis
+    p_value = np.mean(np.abs(bootstrap_diffs) >= np.abs(observed_mean_diff))
+    
+    return observed_mean_diff, p_value
+
+def bootstrap_test_autocorrelated2(
+    x: np.ndarray,
+    y: np.ndarray,
+    block_size: int,
+    method: str = "moving_block",
+    n_bootstrap: int = 10000
+) -> Tuple[float, Tuple[float, float], float]:
+    """
+    Compare two autocorrelated time series using moving block bootstrap.
+    
+    Args:
+        x: First time series array
+        y: Second time series array
+        block_size: Block length for bootstrap (should capture autocorrelation)
+        ci_percent: Desired confidence interval percentage (e.g., 95 for 95% CI)
+        n_bootstrap: Number of bootstrap iterations
+        
+    Returns:
+        Tuple containing:
+        - observed_mean_diff: The observed mean difference (x.mean() - y.mean())
+        - ci: Confidence interval bounds as (lower, upper)
+        - p_value: Two-sided p-value for the mean difference
+    """
+    # Validate inputs
+    assert len(x) == len(y), "Arrays must be of equal length"
+    assert block_size > 0, "Block size must be positive"
+    
+    # Calculate observed statistic
+    observed_mean_diff = np.mean(x) - np.mean(y)
+    
+    # Calculate centered paired differences to enforce null hypothesis
+    d = x - y
+    d_centered = d - np.mean(d)
+
+    # Construct null sample where difference mean = 0
+    x_null = y + d_centered  # so mean(x_null) == mean(y)
+    
+    # Combine data for paired bootstrap
+    combined = np.column_stack((x_null, y))
+    
+    # Initialize bootstrap
+    if method == "moving_block":
+        bs = MovingBlockBootstrap(block_size, combined, seed=1234)
+    else:
+        bs = StationaryBootstrap(block_size, combined, seed=1234)
+    
+    # Run bootstrap
+    bootstrap_diffs = []
+    for result in bs.bootstrap(n_bootstrap):
+        resampled_data = result[0][0]  # Get resampled array
+        x_resampled = resampled_data[:, 0]
+        y_resampled = resampled_data[:, 1]
+        bootstrap_diff = np.mean(x_resampled) - np.mean(y_resampled)
+        
+        bootstrap_diffs.append(bootstrap_diff)
+    
+    bootstrap_diffs = np.array(bootstrap_diffs)
+    
+    # Calculate p-value (two-sided)
+    # Center the bootstrap distribution at 0 for null hypothesis
+    p_value = np.mean(np.abs(bootstrap_diffs) >= np.abs(observed_mean_diff))
+    
+    return observed_mean_diff, p_value
+
+def bootstrap_test_autocorrelated3(
+    x: np.ndarray,
+    y: np.ndarray,
+    block_size: int,
+    bootstrap_method: str = "moving_block",
+    n_bootstrap: int = 10000,
+) -> Tuple[float, float]:
+    """
+    Compare two autocorrelated time series using block bootstrap.
+    Returns: (observed_mean_diff, (ci_lower, ci_upper), p_value)
+    """
+    # Calculate the pooled mean (assuming H₀: μₓ = μᵧ is true)
+    pooled_mean = (np.mean(x) + np.mean(y)) / 2
+    
+    # Center both series around the pooled mean (enforcing H₀)
+    x_centered = x - np.mean(x) + pooled_mean
+    y_centered = y - np.mean(y) + pooled_mean
+    
+    combined = np.column_stack((x_centered, y_centered))
+    
+    # Validate inputs and initialize bootstrap
+    if bootstrap_method == "moving_block":
+        bs = MovingBlockBootstrap(block_size, combined)
+    else:
+        bs = StationaryBootstrap(block_size, combined)
+
+    # Observed statistic
+    observed_mean_diff = np.mean(x) - np.mean(y)
+
+    # Bootstrap the mean difference
+    bootstrap_diffs = []
+    for result in bs.bootstrap(n_bootstrap):
+        resampled_data = result[0][0]
+        x_resampled = resampled_data[:, 0]
+        y_resampled = resampled_data[:, 1]
+        bootstrap_diffs.append(np.mean(x_resampled) - np.mean(y_resampled))
+    
+    bootstrap_diffs = np.array(bootstrap_diffs)
+
+    # Correct p-value calculation: Fraction of bootstrap diffs MORE EXTREME than observed
+    p_value = np.mean(np.abs(bootstrap_diffs) >= np.abs(observed_mean_diff))
+
+    return observed_mean_diff, p_value
+
+
+def permutation_test(diff, n_permutations=10000, alternative='greater', seed=None):
+    """
+    Permutation test for paired differences.
+
+    Parameters:
+    - diff: array-like, differences (e.g., error1 - error2)
+    - n_permutations: number of permutations (default: 10,000)
+    - alternative: 'greater', 'less', or 'two-sided'
+    - seed: optional int, for reproducibility
+
+    Returns:
+    - p-value (float)
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    diff = np.array(diff)
+    diff = diff[diff != 0]  # remove ties
+    
+    nonzero_diff = diff[diff != 0]  # Exclude ties (zero differences)
+    if len(nonzero_diff) == 0:
+        print("⚠️ All differences are zero — no variation to test. Returning p = 1.0.")
+        return 1.0
+
+    observed_stat = np.sum(diff)
+    perm_stats = np.zeros(n_permutations)
+
+    for i in range(n_permutations):
+        signs = np.random.choice([1, -1], size=len(diff))
+        perm_stats[i] = np.sum(diff * signs)
+
+    if alternative == 'greater':
+        p_value = np.mean(perm_stats >= observed_stat)
+    elif alternative == 'less':
+        p_value = np.mean(perm_stats <= observed_stat)
+    elif alternative == 'two-sided':
+        p_value = np.mean(np.abs(perm_stats) >= abs(observed_stat))
+    else:
+        raise ValueError("alternative must be 'two-sided', 'greater', or 'less'")
+
+    return p_value
+
+def block_permutation_test(diff, block_size=12, n_permutations=10000, alternative='greater', random_state=None):
+    """
+    Perform a block permutation test on paired difference data with temporal dependence.
+    
+    Parameters:
+        diff (np.array): Array of paired differences (e.g., error1 - error2), shape (n,).
+        block_size (int): Length of each block (e.g., 3 months).
+        n_permutations (int): Number of permutations to perform.
+        alternative (str): 'greater', 'less', or 'two-sided'.
+        random_state (int or None): Random seed for reproducibility.
+    
+    Returns:
+        p_value (float): P-value of the test.
+        observed_stat (float): Observed mean difference.
+        permuted_stats (np.array): Permuted statistics.
+    """
+    rng = np.random.default_rng(random_state)
+
+    diff = np.asarray(diff)
+    n = len(diff)
+    n_blocks = n // block_size
+
+    # truncate to full blocks
+    diff = diff[:n_blocks * block_size]
+    blocks = diff.reshape(n_blocks, block_size)
+
+    observed_stat = np.mean(diff)
+    permuted_stats = np.empty(n_permutations)
+
+    for i in range(n_permutations):
+        signs = rng.choice([-1, 1], size=n_blocks)
+        flipped_blocks = blocks * signs[:, np.newaxis]
+        permuted_stats[i] = np.mean(flipped_blocks.flatten())
+
+    if alternative == 'greater':
+        p_value = np.mean(permuted_stats >= observed_stat)
+    elif alternative == 'less':
+        p_value = np.mean(permuted_stats <= observed_stat)
+    elif alternative == 'two-sided':
+        p_value = np.mean(np.abs(permuted_stats) >= abs(observed_stat))
+    else:
+        raise ValueError("alternative must be 'greater', 'less', or 'two-sided'")
+
+    return p_value, observed_stat, permuted_stats
 
 
 #%% dokimastiko
@@ -555,7 +920,14 @@ dfLD = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
 dfHD = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
 dfSITE = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
 dfERROR_DIFF = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
+dfDOWN_MINUS_ERA = insitu.loc[insitu.index.isin(hd.valid_time.values), :]
 
+'''
+dfSLOPE = pd.DataFrame(
+    columns=["slopeLD", "slope_stdLD", "slopeHD", "slope_stdHD"], 
+    index=stations.index
+    )
+'''
 '''
 Pithanotata na yparxei kai grhgoroteros tropos
 Alla autos douleuei sigoura kala
@@ -563,23 +935,31 @@ Prosoxh sta indexes, exei mismatch logw multiindex
 sta dataarray derived products
 me kamia lambda function mhpws??
 '''
+
+# RE MLK KANE TA ME ARRAYS TI GYFTIES EINAI AUTES
 slopesLD = []
 slopes_stdLD = []
 interceptsLD = []
-#intercepts_stdLD = []
+intercepts_stdLD = []
 rvaluesLD = []
 
 slopesHD = []
 slopes_stdHD = []
 interceptsHD = []
-#intercepts_stdHD = []
+intercepts_stdHD = []
 rvaluesHD = []
 
+skewnesses = []
 stats_wilcoxon = []
 pvalues_wilcoxon = []
 
+pvalues_permutation = []
+pvalues_block_permutation = []
+
+
 non_normal_diff_error_distributions = []
 statistically_significant_diffs = []
+significant_permutations = []
 
 print("Performing IDW interpolation on LD & HD Data...")
 for i in range(len(stations)):
@@ -609,7 +989,7 @@ for i in range(len(stations)):
         plt.plot(hd.valid_time.values, seriesLD, linestyle="--")
         plt.plot(hd.valid_time.values, seriesSITE, c="r", alpha=0.75)
         plt.plot(hd.valid_time.values, seriesHD, c="k")
-        plt.title(f'2m Temperature - {station_name} ({station_code})')
+        plt.title(f'2m Temperature - {station_name} ({station_code}) - {target_resolution}°')
         
         plt.legend(
             ["ERA5-Land", "In-situ", "Downscaled"], prop={'size': 7}, 
@@ -630,30 +1010,46 @@ for i in range(len(stations)):
         slopeLD = np.nan
         slope_stdLD = np.nan
         interceptLD = np.nan
+        intercept_stdLD = np.nan
         rvalueLD = np.nan
         
         slopeHD = np.nan
         slope_stdHD = np.nan
         interceptHD = np.nan
+        intercept_stdHD = np.nan
         rvalueHD = np.nan
         
+        skewness = np.nan
         stat_wilcoxon = np.nan
         pvalue_wilcoxon = np.nan
         
+        pvalue_permutation = np.nan
+        
+        errorLD = np.nan
+        errorHD = np.nan
         diff = np.nan
         non_normal_diff_error_distribution = "NaN"
         statistically_significant_diff = "NaN"
+        significant_permutation = "NaN"
+        
+        down_minus_era = np.nan
         
     else:
         print("Station inside ERA5-Land grid.")
         slopeLD, interceptLD, rvalueLD, pvalueLD, slope_stdLD = linregress(
             seriesSITE, seriesLD
             )
+        intercept_stdLD = linregress(
+            seriesSITE, seriesLD
+            ).intercept_stderr
         print("for ERA5-Land:")
         print(linregress(seriesSITE, seriesLD))
         slopeHD, interceptHD, rvalueHD, pvalueHD, slope_stdHD = linregress(
             seriesSITE, seriesHD
             )
+        intercept_stdHD = linregress(
+            seriesSITE, seriesHD
+            ).intercept_stderr
         print(f"for Downscaled to {target_resolution}deg:")
         print(linregress(seriesSITE, seriesHD))
         print("\n")
@@ -665,8 +1061,67 @@ for i in range(len(stations)):
         errorLD = np.abs(seriesLD.values - seriesSITE.values)
         errorHD = np.abs(seriesHD.values - seriesSITE.values)
         
+        # check the difference between downscaled and ERA5-Land
+        # this is the stat we are gonna test
+        # test normality, symmetry, autocorrelation
+        down_minus_era = seriesHD.values - seriesLD.values
+        # qq-plot for normality
+        probplot(down_minus_era, dist="norm", plot=plt)
+        plt.title(f"Q-Q Plot - {station_name} ({station_code})")
+        plt.show()
+        
+        #normality=0
+        #assymetry=0
+        #autocorrelation=0
+        
+        if shapiro(down_minus_era).pvalue<0.05:
+            print("Difference between Timeseries NOT-NORMAL...")
+        else:
+            print("Data likely Normal...")
+        
+        if np.abs(yule_kendall_skewness(down_minus_era))>0.25:
+            print(f"Yule-Kendall Assymetry NON-Negligible...")
+        else:
+            print("Non-Significant Yule-Kendall Assymetry...")
+            
+        if np.abs(skew(down_minus_era))>0.5:
+            print(f"Skewness Assymetry NON-Negligible...")
+            if np.abs(skew(down_minus_era))>1:
+                print("STRONG Skewness Assymetry detected...")
+        else:
+            print("Non-Significant Skewness Assymetry...")
+            
+        if acf(down_minus_era)[1]>0.3: # or centered_confint[1]
+            print(f"STRONG Lag-1 Autocorrelation detected...")
+        
+        
+        print(f"Shapiro-Wilk Test for errors - {station_name} - {station_code}")
+        shapiro_statLD, shapiro_pvalueLD = shapiro(errorLD)
+        shapiro_statHD, shapiro_pvalueHD = shapiro(errorHD)
+        if (shapiro_pvalueLD>0.05) & (shapiro_pvalueHD>0.05):
+            print("Both LD and HD are likely normally distributed...")
+            print("Paired t-test appropirate?")
+        else:
+            print("One or Both of LD and HD errors likely non-normal...")
+            print("Paired t-test not approrirate?")
+        print("\n")
+        
+        plot_acf(errorLD)
+        plt.title(f"Autocorrelation LD: {station_name} - {station_code}")
+        plt.show()
+        plot_acf(errorHD)
+        plt.title(f"Autocorrelation HD: {station_name} - {station_code}")
+        plt.show()
+        
+        
+
+        
         # LD-HD to check if downscaled is an improvement
         diff = np.round(errorLD - errorHD, 2)  # to avoid roundoff error
+        
+        # check skewness of diff
+        skewness = skew(diff)
+        
         # test normality of d
         stat_shapiro, pvalue_shapiro = shapiro(diff)
         if pvalue_shapiro < 0.05:
@@ -679,41 +1134,81 @@ for i in range(len(stations)):
         if np.median(diff) > 0:  #case of statistically significant improvement
             print(f"median error diff in favor of downscaled for {station_name} ({station_code})...")
             print("checking for statistically significant improvement...")
+            # doing a wilcoxon and a permutation test in each case...
             stat_wilcoxon, pvalue_wilcoxon = wilcoxon(diff, alternative="greater")
             if pvalue_wilcoxon <0.05:
-                print("IMPROVEMENT detected...")
+                print("IMPROVEMENT detected by Wilcoxon...")
                 statistically_significant_diff = "better"
             else:
-                print("NO statisrical significance afterall...")
+                print("NO statisrical significance by Wilcoxon...")
                 statistically_significant_diff = "none"
+            
+            pvalue_permutation = permutation_test(diff, alternative="greater")
+            if pvalue_permutation <0.05:
+                print("IMPROVEMENT detected by Permutation...")
+                significant_permutation = "better"
+            else:
+                print("NO statisrical significance by Permutation...")
+                significant_permutation = "none"
         
         if np.median(diff) < 0:  #case of statistically significant deterioration
             print(f"median error diff against downscaled for {station_name} ({station_code})...")
             print("checking for statistically significant deterioration...")
             stat_wilcoxon, pvalue_wilcoxon = wilcoxon(diff, alternative="less")
             if pvalue_wilcoxon <0.05:
-                print("statistically significant DETERIORATION detected...")
+                print("DETERIORATION detected by Wilcoxon...")
                 statistically_significant_diff = "worse"
             else:
-                print("NO statisrical significance afterall...")
+                print("NO statisrical significance by Wilcoxon...")
                 statistically_significant_diff = "none"
+            
+            pvalue_permutation = permutation_test(diff, alternative="less")
+            if pvalue_permutation <0.05:
+                print("DETERIORATION detected by Permutation...")
+                significant_permutation = "worse"
+            else:
+                print("NO statisrical significance by Permutation...")
+                significant_permutation = "none"
         
         if np.median(diff) == 0:  #any practical significance?
             print(f"median error diff ZERO for {station_name} ({station_code})...")
             print("CAREFULLY INTERPRET TEST RESULTS FOR THIS STATION...")
             print("checking for statistically significant differences...")
-            stat_wilcoxon, pvalue_wilcoxon = wilcoxon(diff, alternative="less")
+            stat_wilcoxon, pvalue_wilcoxon = wilcoxon(diff, alternative="two-sided")
             if pvalue_wilcoxon <0.05:
-                print("statistically significant DIFFERENCES detected...")
+                print("DIFFERENCES detected by Wilcoxon...")
                 statistically_significant_diff = "CARE"
             else:
-                print("NO statisrical significance afterall...")
+                print("NO statisrical significance by Wilcoxon...")
                 statistically_significant_diff = "none"
+            
+            pvalue_permutation = permutation_test(diff, alternative="two-sided")
+            if pvalue_permutation <0.05:
+                print("DIFFERENCES detected by Permutation...")
+                significant_permutation = "CARE"
+            else:
+                print("NO statisrical significance by Permutation...")
+                significant_permutation = "none"
+                
         
+        # warn if skewness in diff's distribution is detected
+        print(f"median: {np.median(diff):.3f}")
+        print(f"mean: {np.mean(diff):.3f}")
+        print(f"skewness: {skewness:.3f}")
+        if np.abs(skewness) > 0.5:
+            print("moderate skewness detected, assees wilcoxon's results carefully")
         print("\n")
         # most error diffs are not normal...
         #stat_ttest, pvalue_ttest = ttest_rel(errorHD, errorLD)
         
+        #print(acf(diff,nlags=len(diff))[11])
+        plot_acf(diff)
+        plt.title(f"Diff Autocorrelation: {station_name} - {station_code}")
+        plt.show()
+        #print("\n")
+        
+        
+        # scatter plot
         if visualize == True:
             # scatter plot per station
             xmin = np.min([
@@ -734,6 +1229,7 @@ for i in range(len(stations)):
             plt.plot(x, yHD, c="brown", linestyle="--", alpha=0.95, linewidth=1.5)
             plt.ylabel("Modeled Temperature  [°C]")
             plt.xlabel("Insitu Temperature  [°C]")
+            '''
             if interceptLD<=0:
                 arithmetic_stringLD=""
             else:
@@ -742,49 +1238,132 @@ for i in range(len(stations)):
                 arithmetic_stringHD=""
             else:
                 arithmetic_stringHD="+"
+            #"±"
+            '''
+            labelLD = make_legend_label(
+                slopeLD, slope_stdLD, interceptLD, intercept_stdLD
+                )
+            labelHD = make_legend_label(
+                slopeHD, slope_stdHD, interceptHD, intercept_stdHD
+                )
             plt.legend(
                 ["ERA5-Land", 
-                 f'{slopeLD:.3f}T{arithmetic_stringLD}{interceptLD:.3f}',
+                 labelLD,
                  "Downscaled", 
-                 f'{slopeHD:.3f}T{arithmetic_stringHD}{interceptHD:.3f}'],
-                fontsize=8
+                 labelHD],
+                loc='upper left',
+                fontsize=7
                 )
             plt.plot(x, x, c="k", linestyle="--", alpha=0.75, linewidth=1.5)
-            plt.title(f"Temperature Scatter Plot - {station_name} ({station_code})")
+            plt.title(f"Scatter Plot - {station_name} ({station_code}) - {target_resolution}°")
             plt.axis("square")
             if save_figures == True:
                 plt.savefig(f"outputs//scatter-plot-monthly-{station_code}-{station_name}-{target_resolution}deg.png", dpi=500, bbox_inches="tight")
             plt.show()
+            
+            # ecdf plot per station
+            sorted_era5land = ecdf(seriesLD)[0]
+            sorted_downscaled = ecdf(seriesHD)[0]
+            sorted_insitu = ecdf(seriesSITE)[0]
+
+            cdf_era5land = ecdf(seriesLD)[1]
+            cdf_downscaled = ecdf(seriesHD)[1]
+            cdf_insitu = ecdf(seriesSITE)[1]
+            
+            plt.plot(sorted_era5land, cdf_era5land, linestyle="--")
+            plt.plot(sorted_insitu, cdf_downscaled, c="r")
+            plt.plot(sorted_downscaled, cdf_insitu, c="k")
+            plt.legend(
+                ["ERA5-Land", "In-situ", "Downscaled"], 
+                framealpha=0.3
+                )
+            plt.grid()
+            plt.title(f"Empirical CDF - {station_name} ({station_code}) - {target_resolution}°")
+            plt.xlabel("Temperature  [°C]")
+            plt.ylabel("Probability")
+            if save_figures == True:
+                plt.savefig(f"outputs//ecdf-temperatures-{station_code}-{station_name}-{target_resolution}deg.png", dpi=500)
+            plt.show()
+            
+            
+        print(f"Moving Block Bootstrapping Test - {station_name} - {station_code}")
+        print("1:")
+        #print(compare_autocorrelated_series(seriesHD, seriesLD, 12))
+        print("2:")
+        #print(compare_autocorrelated_series2(seriesHD, seriesLD, 12))
+    
+    
+    
+    plt.plot(diff)
+    plt.title(f"Diff: {station_name} - {station_code}")
+    plt.show()
     
     
     dfERROR_DIFF.loc[:,str(station_code)] = diff
+    
+    dfDOWN_MINUS_ERA.loc[:,str(station_code)] = down_minus_era
 
     slopesLD.append(slopeLD)
     slopes_stdLD.append(slope_stdLD)
     interceptsLD.append(interceptLD)
+    intercepts_stdLD.append(intercept_stdLD)
     rvaluesLD.append(rvalueLD)
 
     slopesHD.append(slopeHD)
     slopes_stdHD.append(slope_stdHD)
     interceptsHD.append(interceptHD)
+    intercepts_stdHD.append(intercept_stdHD)
     rvaluesHD.append(rvalueHD)
     
+    skewnesses.append(skewness)
     stats_wilcoxon.append(stat_wilcoxon)
     pvalues_wilcoxon.append(pvalue_wilcoxon)
     
     non_normal_diff_error_distributions.append(non_normal_diff_error_distribution)
     statistically_significant_diffs.append(statistically_significant_diff)
+    significant_permutations.append(significant_permutation)
     
     
     dfLD.loc[:,str(station_code)] = seriesLD.values
     dfHD.loc[:,str(station_code)] = seriesHD.values
 
 
-stations["statistical_significance"] = statistically_significant_diffs
-stations["error_diff"] =  dfERROR_DIFF.mean(axis=0).values
+stations["pvalue_wilcoxon"] = np.round(pvalues_wilcoxon, 5)
+stations["statistical_significance_wilcoxon"] = statistically_significant_diffs
+stations["statistical_significance_permutation"] = significant_permutations
+stations["skewness"] = np.round(skewnesses, 3)
+stations["error_diff_mean"] =  np.round(dfERROR_DIFF.mean(axis=0).values, 3)
+stations["error_diff_median"] =  np.median(dfERROR_DIFF, axis=0)
+
+stations["slopesLD"] = slopesLD
+stations["slopesHD"] = slopesHD
+stations["slopesLD"] = slopesLD
+stations["slopes_stdLD"] = slopes_stdLD
+stations["slopes_stdHD"] = slopes_stdHD
+stations["interceptsLD"] = interceptsLD
+stations["interceptsHD"] = interceptsHD
+stations["intercepts_stdLD"] = intercepts_stdLD
+stations["intercepts_stdHD"] = intercepts_stdHD
+stations["interceptsHD"] = interceptsHD
+stations["rvaluesLD"] = rvaluesLD
+stations["rvaluesLD"] = rvaluesLD
+stations["rvaluesHD"] = rvaluesHD
 
 
-#%% Linear Fitting and Distribution Visualization
+print("Wilcoxon statisical significance results:")
+print(stations.statistical_significance_wilcoxon.value_counts())
+print(f"Out of: {stations.statistical_significance_wilcoxon.shape[0]} stations in total.")
+print("\n")
+
+# save these to apply statistical tests later
+dfERROR_DIFF.to_csv(f"diff_absolute_errors{target_resolution}.csv")
+dfDOWN_MINUS_ERA.to_csv(f"diff_downscaled_to_era5land{target_resolution}.csv")
+dfLD.to_csv(f"era5land_at_stations{target_resolution}.csv")
+dfHD.to_csv(f"downscaled_at_stations{target_resolution}.csv")
+dfSITE.to_csv(f"stations.csv")
+
+
+#%% Linear Fitting and Distribution Visualization - axtarmas
 # These below get stacked "horizontally" (per station first)
 # if future_stack=True specified, dont specify dropna=False
 dfLD_stacked = dfLD.stack(future_stack=True)
@@ -801,24 +1380,22 @@ mask = ~np.isnan(dfSITE_stacked) & ~np.isnan(dfLD_stacked)
 df_stacked_mask = df_stacked.loc[mask,:]
 
 
-slopeLD, interceptLD, r_valueLD, p_valueLD, std_errLD = linregress(
+slopeLD, interceptLD, r_valueLD, p_valueLD, slope_stdLD = linregress(
     df_stacked_mask.insitu, df_stacked_mask.idw
     )
+intercept_stdLD = linregress(
+    df_stacked_mask.insitu, df_stacked_mask.idw
+    ).intercept_stderr
 
 print("All data metrics:")
-print(
-      linregress(
-          df_stacked_mask.insitu, df_stacked_mask.idw
-          )
-      )
-slopeHD, interceptHD, r_valueHD, p_valueHD, std_errHD = linregress(
+print(linregress(df_stacked_mask.insitu, df_stacked_mask.idw))
+slopeHD, interceptHD, r_valueHD, p_valueHD, slope_stdHD = linregress(
     df_stacked_mask.insitu, df_stacked_mask.downscaled
     )
-print(
-      linregress(
-          df_stacked_mask.insitu, df_stacked_mask.downscaled
-          )
-      )
+intercept_stdHD = linregress(
+    df_stacked_mask.insitu, df_stacked_mask.downscaled
+    ).intercept_stderr
+print(linregress(df_stacked_mask.insitu, df_stacked_mask.downscaled))
 
 
 # Doing it through statsmodels - same results as scipy.linregress
@@ -840,41 +1417,7 @@ print("For Downscaled:")
 print(resultsHD.params)
 
 
-errorERA5 = df_stacked_mask.idw - df_stacked_mask.insitu
-errorDownscaled = df_stacked_mask.downscaled - df_stacked_mask.insitu
-error_diff = errorDownscaled - errorERA5
-error = pd.concat([errorERA5, errorDownscaled, error_diff], axis=1)
-error.columns = ["ERA5-Land", "Downscaled", "Diff"]
-
-# A paired t-test is used below
-# If data not normally distributed, use a Wilcoxon signed-rank test
-t_stat, p_value = stats.ttest_1samp(error_diff, 0)
-
-
 if visualize == True:
-    '''
-    # Histogram and Boxplot for Error Distribution visual inspection
-    plt.subplot(1, 2, 1)
-    sns.histplot(errorERA5, color='blue', kde=True, label='ERA5', bins=10, stat='density')
-    sns.histplot(errorDownscaled, color='green', kde=True, label='Downscaled', bins=10, stat='density')
-    sns.histplot(error_diff, color='brown', kde=True, label='Diff', bins=10, stat='density')
-    plt.title('Histogram of Errors')
-    plt.xlabel('Error (MAE)')
-    plt.ylabel('Density')
-    plt.grid()
-    plt.legend()
-    
-    # Boxplot of errors
-    plt.subplot(1, 2, 2)
-    sns.boxplot(data=error, palette=['blue', 'green', "brown"])
-    plt.title('Boxplot of Errors')
-    plt.xticks([0, 1, 2], ['ERA5', 'Downscaled', "Diff"])
-    plt.ylabel('Error (MAE)')
-    plt.grid()
-    
-    plt.tight_layout()
-    plt.show()
-    '''
     
     # Histogram for Temperature Distribution
     sns.histplot(df_stacked_mask.idw, color='blue', kde=True, label='ERA5-Land', bins=10, stat='density')
@@ -912,6 +1455,7 @@ if visualize == True:
     plt.plot(x, yHD, c="brown", linestyle="--", alpha=0.95, linewidth=1)
     plt.ylabel("Modeled Temperature  [°C]")
     plt.xlabel("Insitu Temperature  [°C]")
+    '''
     if interceptLD<=0:
         arithmetic_stringLD=""
     else:
@@ -920,15 +1464,22 @@ if visualize == True:
         arithmetic_stringHD=""
     else:
         arithmetic_stringHD="+"
+        '''
+    labelLD = make_legend_label(
+        slopeLD, slope_stdLD, interceptLD, intercept_stdLD
+        )
+    labelHD = make_legend_label(
+        slopeHD, slope_stdHD, interceptHD, intercept_stdHD
+        )
     plt.legend(
         ["ERA5-Land", 
-         f'{slopeLD:.3f}T{arithmetic_stringLD}{interceptLD:.3f}',
+         labelLD,
          "Downscaled", 
-         f'{slopeHD:.3f}T{arithmetic_stringHD}{interceptHD:.3f}'],
-        fontsize=8
+         labelHD],
+        fontsize=7
         )
     plt.plot(x, x, c="k", linestyle="--", alpha=0.75, linewidth=1)
-    plt.title("Temperature Scatter Plot")
+    plt.title(f"Scatter Plot - All Stations - {target_resolution}°")
     plt.axis("square")
     if save_figures == True:
         plt.savefig(f"outputs//scatter-plot-monthly-{target_resolution}deg.png", dpi=500, bbox_inches="tight")
@@ -953,7 +1504,7 @@ if visualize == True:
         framealpha=0.3
         )
     plt.grid()
-    plt.title("Empirical CDF")
+    plt.title(f"Empirical CDF - All Stations - {target_resolution}°")
     plt.xlabel("Temperature  [°C]")
     plt.ylabel("Probability")
     if save_figures == True:
@@ -967,7 +1518,7 @@ if visualize == True:
     plt.scatter(sorted_insitu, sorted_downscaled, s=1, alpha=0.75)
     plt.grid()
     plt.axis("square")
-    plt.title('Q-Q Plot')
+    plt.title(f'Q-Q Plot - All Stations - {target_resolution}°')
     plt.ylabel("Modeled Temperature  [°C]")
     plt.xlabel("Insitu Temperature  [°C]")
     plt.legend(
@@ -1099,6 +1650,24 @@ if visualize == True:
             plt.ylim(bottom=0)
         
         plt.show()
+
+
+#%% merge
+stations_merged = station_metrics.merge(stations, right_on=stations.columns[1], left_index=True, how="right")
+
+stations_merged.index = stations_merged.WMO_code
+stations_merged.to_excel(f"statistical_significance_plus_metrics{target_resolution}deg.xlsx")
+
+regression_columns = ["slopesLD", "slopesHD", 
+                      "slopes_stdLD", "slopes_stdHD",
+                      "interceptsLD", "interceptsHD",
+                      "intercepts_stdLD", "intercepts_stdHD",
+                      "rvaluesLD", "rvaluesHD"]
+stations_merged[regression_columns].to_csv(f"regression_statistics{target_resolution}.csv")
+
+
+#sys.stdout = sys.__stdout__
+#log_file.close()
 
 
 #%% Statistical tests and other metrics
