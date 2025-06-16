@@ -21,9 +21,9 @@ dem_file_name = "output.tif"  #must be tif format
 scale_factor = 111120
 
 
-export_nc_to_device = False
-export_Gtiff_to_device = False
-plot_morphography = False
+export_nc_to_device = True
+export_Gtiff_to_device = True
+plot_morphography = True
 #"delete" some datasets - might help with memory?
 save_memory = False
 
@@ -69,7 +69,7 @@ meters_dy = res_lat * meters_latitude
 
 
 #%% Slope computation - central differences
-slope_file_name = f"{dem_file_name[:-4]}-slope-v2.tif"
+slope_file_name = f"{dem_file_name[:-4]}-slope.tif"
 slope_path = os.path.join(cwd, slope_file_name)
 
 # Differences computation
@@ -101,6 +101,7 @@ gradient_magnitude = None
 slope_degrees = np.round( np.degrees(slope_radians) )
 slope_radians = None
 
+print(f"Slope calculation complete. Output saved as {slope_file_name}")
 
 # Export a GTiff image of the computed slope
 if export_Gtiff_to_device == True:
@@ -121,7 +122,7 @@ if export_Gtiff_to_device == True:
 
 
 #%% Aspect Computation - GDAL
-aspect_file_name = f"{dem_file_name[:-4]}-aspect-v2.tif"
+aspect_file_name = f"{dem_file_name[:-4]}-aspect.tif"
 aspect_path = os.path.join(cwd, aspect_file_name)
 '''
 aspect_options = gdal.DEMProcessingOptions(
@@ -211,22 +212,21 @@ if save_memory == True:
     ds_nc = None
 
 
-print(f"Slope calculation complete. Output saved as {slope_file_name}")
 
 if plot_morphography == True:
     plt.title("DEM - in Meters")
     plt.imshow(dem, cmap="inferno_r")
-    #plt.savefig(f"{dem_file_name[:-4]}-dem.png", dpi=1000)
+    plt.savefig(f"{dem_file_name[:-4]}-dem.png", dpi=1500)
     plt.show()
     
     plt.title("Slope - in Degrees")
     plt.imshow(slope_degrees, cmap="magma_r")
-    plt.savefig(f"{slope_file_name[:-4]}.png", dpi=1000)
+    plt.savefig(f"{slope_file_name[:-4]}.png", dpi=1500)
     plt.show()
     
     plt.title("Aspect - in Degrees")
     plt.imshow(aspect, cmap="twilight_r")
-    plt.savefig(f"{dem_file_name[:-4]}-aspect.png", dpi=1000)
+    plt.savefig(f"{dem_file_name[:-4]}-aspect.png", dpi=1500)
     plt.show()
 
 
